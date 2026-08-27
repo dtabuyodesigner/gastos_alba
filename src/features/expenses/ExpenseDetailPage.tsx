@@ -8,6 +8,8 @@ import { formatIsoDate, formatTimestamp, todayIso } from '../../lib/dates'
 import { permissions } from '../../lib/types'
 import { getExpense, updateExpense, voidExpense } from './api'
 import { registerPayment } from '../payments/api'
+import { PaymentForm } from '../payments/PaymentForm'
+import type { PaymentMethod } from '../payments/methods'
 import { ExpenseFormFields, type ExpenseFormState } from './ExpenseFormFields'
 import { TicketPhoto } from '../photos/TicketPhoto'
 import { StatusBadge } from '../../components/StatusBadge'
@@ -24,6 +26,7 @@ export function ExpenseDetailPage() {
   const [form, setForm] = useState<ExpenseFormState | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [payingOpen, setPayingOpen] = useState(false)
 
   useEffect(() => {
     document.title = expense ? `${expense.concept} · Gastos Alba` : 'Ticket · Gastos Alba'
@@ -91,12 +94,13 @@ export function ExpenseDetailPage() {
     }
   }
 
-  async function handleMarkPaid() {
+  async function handleMarkPaid(method: PaymentMethod, notes: string) {
     if (busy) return
     setBusy(true)
     setActionError(null)
     try {
-      await registerPayment({ expenseIds: [id] })
+      await registerPayment({ expenseIds: [id], method, notes: notes || null })
+      setPayingOpen(false)
       await reload()
     } catch (err) {
       setActionError(humanizeError(err))
@@ -180,15 +184,25 @@ export function ExpenseDetailPage() {
           {actionError ? <p className="alert alert--error">{actionError}</p> : null}
 
           <div className="actions actions--stack">
-            {canPay ? (
+            {canPay && !payingOpen ? (
               <button
                 className="btn btn--primary btn--block"
                 type="button"
                 disabled={busy}
-                onClick={() => void handleMarkPaid()}
+                onClick={() => setPayingOpen(true)}
               >
-                {busy ? 'Registrando…' : `Marcar mi parte como pagada (${formatCents(expense.dani_share_cents)})`}
+                Marcar mi parte como pagada ({formatCents(expense.dani_share_cents)})
               </button>
+            ) : null}
+
+            {canPay && payingOpen ? (
+              <PaymentForm
+                amountCents={expense.dani_share_cents}
+                ticketCount={1}
+                busy={busy}
+                onCancel={() => setPayingOpen(false)}
+                onConfirm={(method, notes) => void handleMarkPaid(method, notes)}
+              />
             ) : null}
             {canEdit ? (
               <button className="btn btn--secondary" type="button" onClick={startEditing}>

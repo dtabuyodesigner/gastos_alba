@@ -332,6 +332,59 @@ ningun lado, ni aparecera.
 
 ---
 
+## 15. Se registra COMO se pagó, pero aquí no se paga
+
+**Decision.** Al marcar un ticket como pagado hay que elegir metodo: Bizum, transferencia,
+efectivo u otro. Es un enum de Postgres (`payment_method`) y la columna `payments.method` es
+obligatoria.
+
+**Que NO es esto.** No hay pago dentro de la aplicacion. No hay integracion con Bizum, ni con
+ningun banco, ni pasarela de pago. El dinero se mueve fuera, como siempre; aqui solo se anota
+con que medio, para que el historico tenga sentido dentro de un mes. Tampoco se piden ni se
+guardan IBAN, telefono, referencia de operacion ni justificante bancario: para saber que algo
+se pago por Bizum no hace falta ninguno de esos datos.
+
+**Enum y no texto libre.** Con texto libre acabarian conviviendo "bizum", "Bizum", "BIZUM" y
+"por bizum", y el historico dejaria de poder agruparse. Cuatro valores cubren el caso real;
+`otro` recoge lo demas y `notes` sigue siendo texto libre para aclarar.
+
+**Elegir es obligatorio, sin valor por defecto.** Se decidio obligar en lugar de caer en
+`otro`: si el formulario viniera preseleccionado, se registraria "Bizum" en todo por inercia
+y el dato dejaria de servir. El servidor tambien lo exige, no solo la interfaz: la funcion
+rechaza cualquier valor fuera del conjunto.
+
+**Excepcion coherente.** Un lote que suma cero (tickets con 0% para Dani) no crea fila en
+`payments`, asi que no pide metodo: no se ha movido dinero que describir.
+
+**En los avisos.** El texto lo incluye cuando aporta: "Dani ha marcado como pagado el ticket
+Farmacia por Bizum". La preposicion va dentro de la etiqueta (`payment_method_phrase`) para
+que la frase se lea bien sin encadenar casos en cada sitio que la componga.
+
+---
+
+## 16. Marcar un aviso como leido pasa solo por las funciones
+
+**Decision.** Se ha revocado el `UPDATE` sobre `notifications` y retirado su politica. La
+unica via es `mark_notification_read()` y `mark_all_notifications_read()`, que pasan a ser
+`SECURITY DEFINER`.
+
+**Por que.** Con una politica de `UPDATE`, el cliente podia escribir `read_at` directamente
+por PostgREST. No rompia la privacidad —el trigger impedia tocar el resto de campos y la
+politica limitaba a las filas propias—, pero dejaba el contrato mas abierto de lo necesario:
+dos defensas encadenadas donde basta una puerta.
+
+**Contrapartida, y por que importa.** Al ser `DEFINER`, esas funciones ya no estan protegidas
+por RLS: el filtro `recipient_profile_id = auth.uid()` que llevan dentro es ahora lo unico que
+impide marcar como leidos los avisos de la otra persona. Por eso comprueban ademas que quien
+llama tenga un perfil activo, y por eso hay un test estatico que verifica que ese filtro sigue
+escrito.
+
+**No cambia.** Sigue sin poder tocarse `title`, `body`, `type`, `expense_id`, `payment_id`,
+`recipient_profile_id` ni `actor_profile_id` —el trigger sigue puesto—, y sigue sin haber
+`DELETE`.
+
+---
+
 ## Anotado para mas adelante (no construido)
 
 - OCR del ticket para prerrellenar importe y fecha, siempre corregible a mano.
@@ -345,3 +398,5 @@ ningun lado, ni aparecera.
   manual desde el panel de Supabase, no un flujo de la aplicacion.
 - Excepcion "gasto sin justificante", para un ticket perdido o un pago sin comprobante (ver
   decision 9 ter). Fuera de alcance a proposito en esta version.
+- Pago real dentro de la aplicacion, integracion con Bizum, con un banco o con una pasarela:
+  descartado, no pendiente (decision 15). Aqui solo se registra lo que ocurre fuera.

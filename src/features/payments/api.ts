@@ -1,5 +1,6 @@
 import { supabase } from '../../lib/supabase'
 import type { Payment } from '../../lib/types'
+import { validatePaymentMethod, type PaymentMethod } from './methods'
 
 /**
  * Registra un pago de la parte de Dani sobre uno o varios gastos.
@@ -11,15 +12,19 @@ import type { Payment } from '../../lib/types'
  */
 export async function registerPayment(params: {
   expenseIds: string[]
-  method?: string | null
+  /** Como se pago fuera de la app. Obligatorio: el servidor tambien lo exige. */
+  method: PaymentMethod
   notes?: string | null
   paidAt?: string | null
 }): Promise<string | null> {
   if (params.expenseIds.length === 0) throw new Error('Selecciona al menos un ticket.')
 
+  const methodProblem = validatePaymentMethod(params.method)
+  if (methodProblem) throw new Error(methodProblem)
+
   const { data, error } = await supabase.rpc('register_payment', {
     p_expense_ids: params.expenseIds,
-    p_method: params.method ?? null,
+    p_method: params.method,
     p_notes: params.notes ?? null,
     p_paid_at: params.paidAt ?? null,
   })

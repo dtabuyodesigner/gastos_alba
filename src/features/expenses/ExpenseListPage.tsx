@@ -6,6 +6,8 @@ import { formatCents } from '../../lib/money'
 import { permissions, type ExpenseStatus } from '../../lib/types'
 import { listExpenses } from './api'
 import { registerPayment } from '../payments/api'
+import { PaymentForm } from '../payments/PaymentForm'
+import type { PaymentMethod } from '../payments/methods'
 import { ExpenseCard } from './ExpenseCard'
 import { Spinner } from '../../components/Spinner'
 import { EmptyState } from '../../components/EmptyState'
@@ -25,6 +27,7 @@ export function ExpenseListPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [payError, setPayError] = useState<string | null>(null)
   const [paying, setPaying] = useState(false)
+  const [payingOpen, setPayingOpen] = useState(false)
 
   const loader = useCallback(() => listExpenses({ status: filter, includeVoided: filter === 'todos' }), [filter])
   const { data, loading, error, reload } = useAsyncData(loader)
@@ -38,6 +41,7 @@ export function ExpenseListPage() {
   useEffect(() => {
     setSelected(new Set())
     setPayError(null)
+    setPayingOpen(false)
   }, [filter])
 
   const canPay = profile ? permissions.canRegisterPayment(profile.role) : false
@@ -60,13 +64,14 @@ export function ExpenseListPage() {
     })
   }
 
-  async function handleGroupedPayment() {
+  async function handleGroupedPayment(method: PaymentMethod, notes: string) {
     if (paying || selected.size === 0) return
     setPaying(true)
     setPayError(null)
     try {
-      await registerPayment({ expenseIds: [...selected] })
+      await registerPayment({ expenseIds: [...selected], method, notes: notes || null })
       setSelected(new Set())
+      setPayingOpen(false)
       await reload()
     } catch (err) {
       setPayError(humanizeError(err))
@@ -119,7 +124,17 @@ export function ExpenseListPage() {
 
       {payError ? <p className="alert alert--error">{payError}</p> : null}
 
-      {groupingEnabled && selected.size > 0 ? (
+      {groupingEnabled && selected.size > 0 && payingOpen ? (
+        <PaymentForm
+          amountCents={selectedTotal}
+          ticketCount={selected.size}
+          busy={paying}
+          onCancel={() => setPayingOpen(false)}
+          onConfirm={(method, notes) => void handleGroupedPayment(method, notes)}
+        />
+      ) : null}
+
+      {groupingEnabled && selected.size > 0 && !payingOpen ? (
         <div className="paybar" role="region" aria-label="Pago agrupado">
           <div className="paybar__info">
             <span>
@@ -127,13 +142,8 @@ export function ExpenseListPage() {
             </span>
             <strong>{formatCents(selectedTotal)}</strong>
           </div>
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={paying}
-            onClick={() => void handleGroupedPayment()}
-          >
-            {paying ? 'Registrando…' : 'Marcar como pagados'}
+          <button type="button" className="btn btn--primary" onClick={() => setPayingOpen(true)}>
+            Marcar como pagados
           </button>
         </div>
       ) : null}

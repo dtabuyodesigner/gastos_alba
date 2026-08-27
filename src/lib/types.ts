@@ -1,5 +1,9 @@
 /** Tipos de dominio de Gastos Alba. Reflejan el esquema de supabase/migrations. */
 
+import type { PaymentMethod } from '../features/payments/methods'
+
+export type { PaymentMethod }
+
 export type UserRole = 'alba' | 'dani' | 'admin'
 export type ExpenseStatus = 'pendiente' | 'pagado' | 'anulado'
 export type SplitType = 'mitad' | 'porcentaje'
@@ -50,7 +54,7 @@ export interface Payment {
   paid_by: string
   paid_at: string
   amount_cents: number
-  method: string | null
+  method: PaymentMethod
   notes: string | null
   created_at: string
 }

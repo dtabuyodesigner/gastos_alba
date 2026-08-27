@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react'
 import { useAsyncData } from '../lib/useAsyncData'
 import { listExpenses } from '../features/expenses/api'
 import { listPayments } from '../features/payments/api'
+import { paymentMethodLabel } from '../features/payments/methods'
 import { formatCents } from '../lib/money'
 import { formatMonthKey, formatTimestamp, monthKey } from '../lib/dates'
 import type { ExpenseWithPhotos, Payment } from '../lib/types'
@@ -74,7 +75,7 @@ export function HistoryPage() {
               <li key={payment.id} className="payment">
                 <span>{formatTimestamp(payment.paid_at)}</span>
                 <strong>{formatCents(payment.amount_cents)}</strong>
-                {payment.method ? <span className="muted">{payment.method}</span> : null}
+                <span className="payment__method">{paymentMethodLabel(payment.method)}</span>
               </li>
             ))}
           </ul>

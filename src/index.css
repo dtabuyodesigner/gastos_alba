@@ -999,3 +999,33 @@ textarea.input {
   flex: none;
   align-self: center;
 }
+
+/* --- Registro de pago ----------------------------------------------------- */
+
+.paysheet {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.paysheet__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.paysheet__amount {
+  font-size: 1.3rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment__method {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}

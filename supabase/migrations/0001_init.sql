@@ -29,6 +29,13 @@ do $$ begin
   create type public.split_type as enum ('mitad', 'porcentaje');
 exception when duplicate_object then null; end $$;
 
+-- Como se hizo el pago FUERA de la aplicacion. Es una etiqueta de registro y
+-- nada mas: aqui no se mueve dinero, no hay integracion con Bizum ni con ningun
+-- banco, y no se guarda ningun dato bancario.
+do $$ begin
+  create type public.payment_method as enum ('bizum', 'transferencia', 'efectivo', 'otro');
+exception when duplicate_object then null; end $$;
+
 -- -----------------------------------------------------------------------------
 -- updated_at automatico
 -- -----------------------------------------------------------------------------
@@ -248,7 +255,10 @@ create table if not exists public.payments (
   paid_by      uuid not null references public.profiles (id),
   paid_at      timestamptz not null default now(),
   amount_cents integer not null check (amount_cents > 0),
-  method       text check (method is null or char_length(method) <= 60),
+  -- Obligatorio: un historico de pagos sin saber como se pagaron sirve de poco.
+  -- Los tickets con 0% para Dani no llegan a crear una fila aqui, asi que no
+  -- necesitan metodo.
+  method       public.payment_method not null,
   notes        text check (notes is null or char_length(notes) <= 1000),
   created_at   timestamptz not null default now()
 );
@@ -294,6 +304,22 @@ as $$
       || ','
       || lpad((abs(p_cents) % 100)::text, 2, '0')
       || ' €';
+$$;
+
+-- "por Bizum", "en efectivo"… La preposicion va en la etiqueta para que la
+-- frase del aviso se lea bien sin encadenar casos en cada sitio que la use.
+create or replace function public.payment_method_phrase(p_method public.payment_method)
+returns text
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select case p_method
+    when 'bizum'         then 'por Bizum'
+    when 'transferencia' then 'por transferencia'
+    when 'efectivo'      then 'en efectivo'
+    else 'por otro medio'
+  end;
 $$;
 
 create table if not exists public.notifications (
@@ -433,13 +459,28 @@ as $$
   );
 $$;
 
+-- -----------------------------------------------------------------------------
+-- Marcar avisos como leidos
+--
+-- Estas dos funciones son la UNICA via: el permiso de UPDATE sobre
+-- `notifications` esta revocado (ver 0002_rls.sql). Por eso son SECURITY
+-- DEFINER y comprueban ellas mismas lo que antes comprobaba la politica: que
+-- quien llama tiene un perfil activo y que la notificacion es suya.
+--
+-- El filtro por `recipient_profile_id = auth.uid()` no es decorativo: sin el,
+-- al ser DEFINER, se podrian marcar como leidos los avisos de la otra persona.
+-- -----------------------------------------------------------------------------
 create or replace function public.mark_notification_read(p_notification_id uuid)
 returns void
 language plpgsql
+security definer
 set search_path = public, pg_temp
 as $$
 begin
-  -- SECURITY INVOKER: la politica RLS ya limita a las propias notificaciones.
+  if not public.is_active_member() then
+    raise exception 'Sin permiso.' using errcode = '42501';
+  end if;
+
   update public.notifications
      set read_at = coalesce(read_at, now())
    where id = p_notification_id
@@ -450,11 +491,16 @@ $$;
 create or replace function public.mark_all_notifications_read()
 returns integer
 language plpgsql
+security definer
 set search_path = public, pg_temp
 as $$
 declare
   v_count integer;
 begin
+  if not public.is_active_member() then
+    raise exception 'Sin permiso.' using errcode = '42501';
+  end if;
+
   update public.notifications
      set read_at = now()
    where recipient_profile_id = auth.uid()
@@ -612,6 +658,8 @@ declare
   v_total      integer;
   v_count      integer;
   v_concept    text;
+  v_method     public.payment_method;
+  v_phrase     text;
 begin
   if not public.can_register_payment() then
     raise exception 'Solo Dani o un administrador pueden registrar pagos.' using errcode = '42501';
@@ -642,12 +690,22 @@ begin
   -- Un lote que suma cero (tickets con 0% para Dani) se cierra sin registrar pago:
   -- no hay dinero que mover, y crear un pago de 0,00 EUR ensuciaria el historico.
   if v_total > 0 then
+    -- El metodo es obligatorio cuando hay dinero de por medio. Se acepta como
+    -- texto y se valida aqui para poder dar un error legible en vez del error
+    -- de conversion de tipo que daria Postgres.
+    if lower(btrim(coalesce(p_method, ''))) not in ('bizum', 'transferencia', 'efectivo', 'otro') then
+      raise exception 'Indica como se ha pagado: bizum, transferencia, efectivo u otro.'
+        using errcode = '22023';
+    end if;
+    v_method := lower(btrim(p_method))::public.payment_method;
+    v_phrase := ' ' || public.payment_method_phrase(v_method);
+
     insert into public.payments (paid_by, paid_at, amount_cents, method, notes)
     values (
       auth.uid(),
       coalesce(p_paid_at, now()),
       v_total,
-      nullif(btrim(coalesce(p_method, '')), ''),
+      v_method,
       nullif(btrim(coalesce(p_notes, '')), '')
     )
     returning id into v_payment_id;
@@ -669,7 +727,8 @@ begin
     perform public.notify_role(
       'alba',
       'payment_registered',
-      public.current_display_name() || ' ha marcado como pagado el ticket ' || v_concept,
+      public.current_display_name() || ' ha marcado como pagado el ticket '
+        || v_concept || coalesce(v_phrase, ''),
       public.format_cents_es(v_total),
       v_ids[1],
       v_payment_id
@@ -686,7 +745,7 @@ begin
       'alba',
       'payment_registered',
       public.current_display_name() || ' ha marcado como pagados ' || v_count
-        || ' tickets por ' || public.format_cents_es(v_total),
+        || ' tickets: ' || public.format_cents_es(v_total) || coalesce(v_phrase, ''),
       coalesce(v_concept, v_count || ' tickets'),
       null,
       v_payment_id

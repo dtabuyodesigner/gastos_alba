@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import initSql from '../../supabase/migrations/0001_init.sql?raw'
 import rlsSql from '../../supabase/migrations/0002_rls.sql?raw'
 import storageSql from '../../supabase/migrations/0003_storage.sql?raw'
+import { PAYMENT_METHODS } from '../features/payments/methods'
 
 /**
  * Guardas sobre el TEXTO de las migraciones.
@@ -112,13 +113,14 @@ describe('reparto', () => {
 
 describe('notificaciones', () => {
   it('el buzon es estrictamente personal', () => {
+    // Solo hay politica de lectura, y limitada al destinatario. La escritura va
+    // por las funciones (ver el test de marcar leido).
     expect(rlsSql).toMatch(/create policy notifications_select_own[\s\S]*?recipient_profile_id = auth\.uid\(\)/)
-    expect(rlsSql).toMatch(/create policy notifications_update_own[\s\S]*?recipient_profile_id = auth\.uid\(\)/)
   })
 
   it('el cliente no puede fabricar avisos ni borrarlos', () => {
     // Sin esto se podria inventar un aviso de "pago registrado" que no ocurrio.
-    expect(rlsSql).toMatch(/revoke insert on public\.notifications from authenticated/)
+    expect(rlsSql).toMatch(/revoke insert, update on public\.notifications from authenticated/)
     expect(rlsSql).toMatch(/revoke delete on[\s\S]*?public\.notifications/)
     expect(rlsSql).not.toMatch(/create policy notifications_insert/)
   })
@@ -126,6 +128,19 @@ describe('notificaciones', () => {
   it('notify_role no es ejecutable por nadie desde fuera', () => {
     expect(rlsSql).toMatch(/revoke all on function public\.notify_role\([\s\S]*?from public, anon, authenticated/)
     expect(rlsSql).not.toMatch(/grant execute on function public\.notify_role/)
+  })
+
+  it('marcar leido solo pasa por las funciones, no por PostgREST', () => {
+    expect(rlsSql).toMatch(/revoke insert, update on public\.notifications from authenticated/)
+    expect(rlsSql).not.toMatch(/create policy notifications_update_own/)
+    for (const fn of ['mark_notification_read', 'mark_all_notifications_read']) {
+      const body = functionBody(initSql, fn)
+      expect(body).toMatch(/security definer/)
+      expect(body).toMatch(/set search_path = public, pg_temp/)
+      // Al ser DEFINER, sin este filtro se podrian marcar los avisos ajenos.
+      expect(body).toMatch(/recipient_profile_id = auth\.uid\(\)/)
+      expect(body).toMatch(/is_active_member\(\)/)
+    }
   })
 
   it('de un aviso solo se puede cambiar si esta leido', () => {
@@ -153,5 +168,29 @@ describe('suscripciones push', () => {
       )
     }
     expect(rlsSql).not.toMatch(/create policy push_subscriptions_delete/)
+  })
+})
+
+describe('metodo de pago', () => {
+  it('el enum del SQL coincide con la lista de la interfaz', () => {
+    expect(initSql).toMatch(
+      /create type public\.payment_method as enum \('bizum', 'transferencia', 'efectivo', 'otro'\)/,
+    )
+    expect([...PAYMENT_METHODS]).toEqual(['bizum', 'transferencia', 'efectivo', 'otro'])
+  })
+
+  it('la columna es del enum y obligatoria', () => {
+    expect(initSql).toMatch(/method\s+public\.payment_method not null/)
+  })
+
+  it('register_payment rechaza un metodo fuera del conjunto', () => {
+    const body = functionBody(initSql, 'register_payment')
+    expect(body).toMatch(/not in \('bizum', 'transferencia', 'efectivo', 'otro'\)/)
+    // La validacion va dentro del if de importe positivo: un lote que suma cero
+    // no crea pago y por tanto no necesita metodo.
+    const guard = body.indexOf("not in ('bizum'")
+    const insert = body.indexOf('insert into public.payments')
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(insert)
   })
 })

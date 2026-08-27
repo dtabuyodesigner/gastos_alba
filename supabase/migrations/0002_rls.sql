@@ -178,16 +178,17 @@ create policy notifications_select_own on public.notifications
   for select to authenticated
   using (recipient_profile_id = auth.uid() and public.is_active_member());
 
+-- Sin politica UPDATE: marcar leido pasa exclusivamente por
+-- mark_notification_read() y mark_all_notifications_read(). Con una politica de
+-- UPDATE, el cliente podria escribir `read_at` directamente por PostgREST; no
+-- rompe la privacidad, pero abre el contrato mas de lo necesario y deja la
+-- puerta a que un cambio futuro del trigger permita algo mas.
 drop policy if exists notifications_update_own on public.notifications;
-create policy notifications_update_own on public.notifications
-  for update to authenticated
-  using (recipient_profile_id = auth.uid() and public.is_active_member())
-  with check (recipient_profile_id = auth.uid());
 
 -- Sin politica INSERT: los avisos los generan create_expense() y
 -- register_payment(). Si el cliente pudiera insertar, podria fabricar un aviso
 -- falso de "pago registrado".
-revoke insert on public.notifications from authenticated;
+revoke insert, update on public.notifications from authenticated;
 
 -- Sin politica DELETE: un aviso se marca leido, no se borra.
 
@@ -224,6 +225,11 @@ grant execute on function public.mark_notification_read(uuid) to authenticated;
 
 revoke all on function public.mark_all_notifications_read() from public, anon;
 grant execute on function public.mark_all_notifications_read() to authenticated;
+
+-- payment_method_phrase solo la usan las funciones internas al componer el
+-- texto del aviso; el cliente tiene sus propias etiquetas.
+revoke all on function public.payment_method_phrase(public.payment_method)
+  from public, anon, authenticated;
 
 revoke all on function public.format_cents_es(integer) from public, anon;
 grant execute on function public.format_cents_es(integer) to authenticated;

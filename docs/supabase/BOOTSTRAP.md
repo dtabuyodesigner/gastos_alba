@@ -260,9 +260,10 @@ select e.concept, e.total_amount_cents, e.dani_share_cents, e.other_share_cents,
 
 **Esperado:** `suma = total_amount_cents` y `fotos = 1` en todos los tickets.
 
-### 7. Pago individual
+### 7. Pago individual, con metodo
 
-Como Dani, abre un ticket pendiente y pulsa "Marcar mi parte como pagada".
+Como Dani, abre un ticket pendiente, pulsa "Marcar mi parte como pagada", elige **Bizum** y
+confirma. El boton no debe dejar confirmar mientras no haya metodo elegido.
 
 ```sql
 select p.amount_cents, count(pe.expense_id) as tickets
@@ -272,7 +273,22 @@ select p.amount_cents, count(pe.expense_id) as tickets
 ```
 
 **Esperado:** el ticket pasa a `pagado`, se crea un pago con `amount_cents` igual a la parte
-de Dani y una sola fila en `payment_expenses`.
+de Dani, `method = 'bizum'` y una sola fila en `payment_expenses`. Compruebalo:
+
+```sql
+select amount_cents, method, notes from public.payments order by paid_at desc limit 1;
+```
+
+Prueba tambien que el metodo se valida en el servidor, no solo en la interfaz. Como Dani, en
+consola:
+
+```js
+await supabase.rpc('register_payment', { p_expense_ids: ['<id-pendiente>'], p_method: 'paypal' })
+await supabase.rpc('register_payment', { p_expense_ids: ['<id-pendiente>'], p_method: null })
+```
+
+**Esperado:** las dos fallan con `Indica como se ha pagado: bizum, transferencia, efectivo u
+otro`, y el ticket **sigue pendiente**.
 
 Prueba tambien el bloqueo por rol: como **Alba**, en consola,
 `await supabase.rpc('register_payment', { p_expense_ids: ['<id-de-un-ticket>'] })`.
@@ -280,11 +296,21 @@ Prueba tambien el bloqueo por rol: como **Alba**, en consola,
 
 ### 8. Pago agrupado
 
-Como Dani, con el filtro "Pendientes", marca **tres** tickets y pulsa "Marcar como pagados".
+Como Dani, con el filtro "Pendientes", marca **tres** tickets, pulsa "Marcar como pagados",
+elige **Transferencia** y confirma.
 
-**Esperado:** un unico pago cuyo `amount_cents` es la suma exacta de las tres partes de
-Dani, y tres filas en `payment_expenses` apuntando a ese pago. Los tres tickets quedan
-`pagado`. Repite la consulta del punto 7 para verificarlo.
+**Esperado:** un unico pago con `method = 'transferencia'`, cuyo `amount_cents` es la suma
+exacta de las tres partes de Dani, y tres filas en `payment_expenses` apuntando a ese pago.
+Los tres tickets quedan `pagado`. Repite la consulta del punto 7 para verificarlo.
+
+Comprueba ademas que **Alba no puede registrar pagos aunque mande un metodo valido**. Como
+Alba, en consola:
+
+```js
+await supabase.rpc('register_payment', { p_expense_ids: ['<id-pendiente>'], p_method: 'bizum' })
+```
+
+**Esperado:** `Solo Dani o un administrador pueden registrar pagos`.
 
 Caso limite que conviene probar una vez: un ticket con **0% para Dani**. Debe poder cerrarse
 (pasa a `pagado`) y **no** debe generar ningun pago de 0,00 EUR en el historico.
@@ -359,13 +385,14 @@ recarga: el indicador de la cabecera debe mostrar un numero, y en Notificaciones
 aparecer `Alba ha subido un ticket de 12,35 €` con el concepto debajo. Al pulsarlo, debe
 abrirse ese ticket y el aviso quedar leido.
 
-**12.2 Pago individual → Alba recibe aviso.** Como Dani, marca un ticket como pagado. Como
-Alba: `Dani ha marcado como pagado el ticket Farmacia`, con el importe en el cuerpo y enlace
-al ticket.
+**12.2 Pago individual → Alba recibe aviso, con el metodo.** Como Dani, marca un ticket como
+pagado por Bizum. Como Alba: `Dani ha marcado como pagado el ticket Farmacia por Bizum`, con
+el importe en el cuerpo y enlace al ticket.
 
-**12.3 Pago agrupado → Alba recibe aviso.** Como Dani, marca tres tickets a la vez. Como
-Alba: `Dani ha marcado como pagados 3 tickets por 40,00 €`, con los conceptos en el cuerpo.
-Al pulsarlo lleva al historico, porque un pago agrupado no tiene un unico ticket.
+**12.3 Pago agrupado → Alba recibe aviso, con el metodo.** Como Dani, marca tres tickets a la
+vez por transferencia. Como Alba: `Dani ha marcado como pagados 3 tickets: 40,00 € por
+transferencia`, con los conceptos en el cuerpo. Al pulsarlo lleva al historico, porque un
+pago agrupado no tiene un unico ticket.
 
 **12.4 Nadie se avisa a si mismo.** Como Dani, sube tu un ticket. Dani **no** debe recibir
 aviso de su propia accion; Alba tampoco, porque el aviso de ticket va dirigido al rol `dani`.
@@ -403,19 +430,25 @@ await supabase.rpc('notify_role', { p_role: 'alba', p_type: 'payment_registered'
 
 // Reescribir el texto de un aviso propio -> debe fallar
 await supabase.from('notifications').update({ title: 'Otra cosa' }).eq('id', MI_AVISO)
+
+// Marcar leido por PostgREST, saltandose la funcion -> debe fallar
+await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', MI_AVISO)
 ```
 
-**Esperado:** las cuatro fallan. La ultima responde `De una notificacion solo se puede
-cambiar si esta leida`.
+**Esperado:** las cinco fallan. Las dos ultimas por permiso denegado: el `UPDATE` sobre
+`notifications` esta revocado y marcar leido pasa solo por las funciones.
 
-**12.7 Marcar leido solo afecta a lo propio.** Como Alba, intenta marcar un aviso de Dani:
+**12.7 Marcar leido funciona, y solo sobre lo propio.** Primero comprueba que la via buena
+funciona: como Alba, pulsa "Marcar leido" en un aviso suyo y confirma que el contador de la
+cabecera baja. Despues intenta marcar un aviso de Dani:
 
 ```js
 await supabase.rpc('mark_notification_read', { p_notification_id: AVISO_DE_DANI })
 ```
 
 **Esperado:** la llamada no da error (no encuentra fila que actualizar), pero el aviso de
-Dani **sigue sin leer**. Compruebalo en SQL:
+Dani **sigue sin leer**. Esto es lo que impide que, al ser la funcion `SECURITY DEFINER`,
+se puedan marcar los avisos ajenos. Compruebalo en SQL:
 
 ```sql
 select id, recipient_profile_id, read_at from public.notifications where id = 'AVISO_DE_DANI';
