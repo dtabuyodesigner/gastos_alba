@@ -96,41 +96,145 @@ la vez. Anota el resultado de cada punto.
 
 ### 1. Las tres migraciones se han ejecutado en orden
 
-```sql
--- Deben aparecer las 5 tablas
-select table_name from information_schema.tables
- where table_schema = 'public'
-   and table_name in ('profiles','expenses','expense_photos','payments','payment_expenses')
- order by table_name;
+Las tres consultas de este punto **se comparan solas** con lo que deberia haber: cada una
+devuelve una columna `veredicto`, y basta con que no haya ninguna fila distinta de `ok`. Se
+han escrito asi, y no con un recuento a mano, porque un numero fijo se queda obsoleto en
+cuanto el esquema crece, que es justo lo que le paso a esta seccion.
 
--- Deben aparecer las 6 funciones
-select routine_name, security_type from information_schema.routines
- where routine_schema = 'public'
-   and routine_name in ('create_expense','register_payment','void_expense',
-                        'is_active_member','current_role_name','can_register_payment')
- order by routine_name;
+**1.a Tablas.**
+
+```sql
+with esperado(nombre) as (values
+  ('profiles'), ('expenses'), ('expense_photos'), ('payments'), ('payment_expenses'),
+  ('notifications'), ('push_subscriptions')
+)
+select e.nombre,
+       case when t.table_name is null then 'FALTA' else 'ok' end as veredicto
+  from esperado e
+  left join information_schema.tables t
+         on t.table_schema = 'public' and t.table_name = e.nombre
+ order by veredicto, e.nombre;
 ```
 
-**Esperado:** 5 tablas y 6 funciones. `create_expense`, `register_payment` y `void_expense`
-deben figurar como `DEFINER`. Si falta algo, alguna migracion no llego a completarse: revisa
-el orden 0001 → 0002 → 0003 y vuelve a ejecutarla.
-
-### 2. RLS activo en las cinco tablas
+**1.b Funciones, con su tipo de seguridad y quien puede ejecutarlas.**
 
 ```sql
-select tablename, rowsecurity from pg_tables
- where schemaname = 'public'
-   and tablename in ('profiles','expenses','expense_photos','payments','payment_expenses')
- order by tablename;
+with esperado(nombre, seguridad, authenticated_puede) as (values
+  -- Llamables desde la aplicacion
+  ('create_expense',              'DEFINER', true),
+  ('register_payment',            'DEFINER', true),
+  ('void_expense',                'DEFINER', true),
+  ('mark_notification_read',      'DEFINER', true),
+  ('mark_all_notifications_read', 'DEFINER', true),
+  -- Ayudantes de autorizacion y de texto
+  ('is_active_member',            'DEFINER', true),
+  ('current_role_name',           'DEFINER', true),
+  ('can_register_payment',        'DEFINER', true),
+  ('current_display_name',        'DEFINER', true),
+  ('format_cents_es',             'INVOKER', true),
+  -- Uso interno: NO deben ser ejecutables por el cliente
+  ('notify_role',                 'DEFINER', false),
+  ('payment_method_phrase',       'INVOKER', false),
+  -- Alta de usuario y guardas (funciones de trigger)
+  ('handle_new_user',             'DEFINER', true),
+  ('touch_updated_at',            'INVOKER', true),
+  ('expenses_guard_update',       'INVOKER', true),
+  ('profiles_guard_update',       'INVOKER', true),
+  ('notifications_guard_update',  'INVOKER', true),
+  ('push_subscriptions_guard_update', 'INVOKER', true)
+)
+select e.nombre,
+       coalesce(r.security_type, 'NO EXISTE') as seguridad_real,
+       e.seguridad                            as seguridad_esperada,
+       coalesce(p.puede, false)               as puede_authenticated,
+       e.authenticated_puede                  as deberia_poder,
+       case
+         when r.security_type is null                                   then 'FALTA'
+         when r.security_type <> e.seguridad                            then 'SEGURIDAD DISTINTA'
+         when coalesce(p.puede, false) <> e.authenticated_puede         then 'PERMISO DISTINTO'
+         else 'ok'
+       end as veredicto
+  from esperado e
+  left join information_schema.routines r
+         on r.routine_schema = 'public' and r.routine_name = e.nombre
+  left join lateral (
+    select bool_or(has_function_privilege('authenticated', pr.oid, 'EXECUTE')) as puede
+      from pg_proc pr
+      join pg_namespace n on n.oid = pr.pronamespace
+     where n.nspname = 'public' and pr.proname = e.nombre
+  ) p on true
+ order by (veredicto <> 'ok') desc, e.nombre;
+```
 
--- Y las politicas registradas
+**La fila que hay que mirar con mas atencion es `notify_role`.** Es la que fabrica los avisos:
+si `puede_authenticated` sale `true`, cualquiera con la clave anon podria inventarse un aviso
+de "pago registrado" a nombre de otra persona. Debe salir `false`.
+
+Las funciones de trigger (`touch_updated_at`, `*_guard_update`, `handle_new_user`) figuran con
+`puede_authenticated = true` porque conservan el permiso que Postgres concede a `PUBLIC` por
+defecto. No es un problema: devuelven `trigger` y Postgres no deja invocarlas fuera del
+contexto de un trigger, asi que no son un vector de ataque.
+
+**1.c ¿Ha crecido el esquema por detras de esta guia?**
+
+```sql
+select 'tabla' as tipo, t.table_name as nombre
+  from information_schema.tables t
+ where t.table_schema = 'public' and t.table_type = 'BASE TABLE'
+   and t.table_name not in ('profiles','expenses','expense_photos','payments',
+                            'payment_expenses','notifications','push_subscriptions')
+union all
+select 'funcion', p.proname
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.proname not in ('create_expense','register_payment','void_expense',
+                         'mark_notification_read','mark_all_notifications_read',
+                         'is_active_member','current_role_name','can_register_payment',
+                         'current_display_name','format_cents_es','notify_role',
+                         'payment_method_phrase','handle_new_user','touch_updated_at',
+                         'expenses_guard_update','profiles_guard_update',
+                         'notifications_guard_update','push_subscriptions_guard_update')
+ order by 1, 2;
+```
+
+**Esperado: ninguna fila.** Si aparece algo, no es necesariamente un error: significa que el
+esquema ha crecido y que **esta seccion se ha quedado atras**. Anade lo nuevo a las listas de
+1.a y 1.b antes de seguir, o la validacion dejara de cubrir el proyecto entero.
+
+Si en 1.a o 1.b falta algo, alguna migracion no llego a completarse: revisa el orden
+0001 → 0002 → 0003 y vuelve a ejecutarla.
+
+### 2. RLS activo en todas las tablas
+
+```sql
+with esperado(nombre) as (values
+  ('profiles'), ('expenses'), ('expense_photos'), ('payments'), ('payment_expenses'),
+  ('notifications'), ('push_subscriptions')
+)
+select e.nombre,
+       coalesce(t.rowsecurity, false) as rls_activo,
+       case when coalesce(t.rowsecurity, false) then 'ok' else 'RLS DESACTIVADO' end as veredicto
+  from esperado e
+  left join pg_tables t on t.schemaname = 'public' and t.tablename = e.nombre
+ order by veredicto, e.nombre;
+```
+
+**Esperado:** `ok` en todas. Una tabla sin RLS en un proyecto de Supabase queda **legible por
+cualquiera con la clave anon**, que es publica.
+
+```sql
+-- Politicas registradas
 select tablename, policyname, cmd from pg_policies
  where schemaname in ('public','storage') order by tablename, policyname;
 ```
 
-**Esperado:** `rowsecurity = true` en las cinco. Y muy importante, **no debe aparecer
-ninguna politica con `cmd = 'DELETE'`**, ni en `public` ni en `storage`: sin borrado
-destructivo significa exactamente eso.
+Aqui hay dos cosas que comprobar:
+
+1. **No debe aparecer ninguna politica con `cmd = 'DELETE'`**, ni en `public` ni en `storage`:
+   sin borrado destructivo significa exactamente eso, y tampoco para un admin.
+2. **`notifications` solo debe tener politica de `SELECT`.** Si aparece una de `UPDATE`, es que
+   se ha reintroducido el camino directo por PostgREST para marcar leido, que se cerro a
+   proposito (ver decision 16 en `docs/DECISIONES.md`).
 
 ### 3. Alba y Dani entran, con su rol correcto
 
