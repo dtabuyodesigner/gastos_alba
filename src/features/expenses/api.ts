@@ -1,5 +1,5 @@
 import { supabase } from '../../lib/supabase'
-import type { Expense, ExpenseStatus, ExpenseWithPhotos, SplitType } from '../../lib/types'
+import type { Expense, ExpenseStatus, ExpenseWithPhotos } from '../../lib/types'
 import { computeSplit, isConsistentSplit, DEFAULT_DANI_PERCENT } from '../../lib/split'
 import { uploadTicketPhoto } from '../photos/api'
 
@@ -47,68 +47,55 @@ export interface CreateExpenseInput {
 /**
  * Crea un gasto con su foto.
  *
- * Orden deliberado: primero se sube la foto y despues se inserta el gasto, para
- * no dejar tickets sin justificante si la subida falla. El identificador se
- * genera en el cliente para poder agrupar la foto por gasto en el storage.
- * Contrapartida asumida: si falla la insercion posterior puede quedar un
- * fichero huerfano (ver docs/DECISIONES.md).
+ * Orden deliberado: primero se sube la foto y despues se crea el gasto, para no
+ * dejar tickets sin justificante si la subida falla (que en movil con mala
+ * cobertura es lo que mas falla).
+ *
+ * La fila del gasto y la de la foto se insertan mediante la funcion
+ * `create_expense`, que las mete en UNA transaccion: nunca queda un ticket
+ * visible cuya foto no este enlazada. El reparto lo recalcula el servidor a
+ * partir del total y del porcentaje.
+ *
+ * Contrapartida asumida: si la subida va bien pero la insercion falla, queda un
+ * fichero huerfano en el bucket (ver docs/DECISIONES.md).
  */
-export async function createExpense(input: CreateExpenseInput, userId: string): Promise<Expense> {
+export async function createExpense(input: CreateExpenseInput): Promise<Expense> {
   const concept = input.concept.trim()
   if (!concept) throw new Error('El concepto no puede estar vacio.')
   if (!Number.isSafeInteger(input.totalCents) || input.totalCents <= 0) {
     throw new Error('El importe total no es valido.')
   }
 
+  // Se valida tambien en cliente para dar un error util antes de ir al servidor.
   const split = computeSplit(input.totalCents, input.daniPercent)
   if (!isConsistentSplit(input.totalCents, split)) {
     throw new Error('El reparto no cuadra con el importe total.')
   }
 
   const id = crypto.randomUUID()
-  const splitType: SplitType = split.daniPercent === DEFAULT_DANI_PERCENT ? 'mitad' : 'porcentaje'
 
   let storagePath: string | null = null
-  let photoFile: File | null = null
   if (input.photo) {
-    photoFile = input.photo
-    storagePath = await uploadTicketPhoto(id, photoFile)
+    storagePath = await uploadTicketPhoto(id, input.photo)
   }
 
-  const { data, error } = await supabase
-    .from('expenses')
-    .insert({
-      id,
-      created_by: userId,
-      expense_date: input.expenseDate,
-      concept,
-      total_amount_cents: input.totalCents,
-      dani_share_cents: split.daniShareCents,
-      other_share_cents: split.otherShareCents,
-      dani_share_percent: split.daniPercent,
-      other_share_percent: split.otherPercent,
-      split_type: splitType,
-      status: 'pendiente' satisfies ExpenseStatus,
-      notes: input.notes?.trim() || null,
-    })
-    .select('*')
-    .single()
-
+  const { error } = await supabase.rpc('create_expense', {
+    p_id: id,
+    p_concept: concept,
+    p_expense_date: input.expenseDate,
+    p_total_amount_cents: input.totalCents,
+    p_dani_percent: split.daniPercent,
+    p_notes: input.notes?.trim() || null,
+    p_storage_path: storagePath,
+    p_original_filename: input.photo ? input.photo.name.slice(0, 255) : null,
+    p_mime_type: input.photo?.type || null,
+    p_size_bytes: input.photo?.size ?? null,
+  })
   if (error) throw error
 
-  if (storagePath && photoFile) {
-    const { error: photoError } = await supabase.from('expense_photos').insert({
-      expense_id: id,
-      storage_path: storagePath,
-      original_filename: photoFile.name.slice(0, 255),
-      mime_type: photoFile.type || null,
-      size_bytes: photoFile.size,
-      uploaded_by: userId,
-    })
-    if (photoError) throw photoError
-  }
-
-  return data as Expense
+  const created = await getExpense(id)
+  if (!created) throw new Error('El ticket se ha creado pero no se ha podido leer.')
+  return created
 }
 
 export interface UpdateExpenseInput {

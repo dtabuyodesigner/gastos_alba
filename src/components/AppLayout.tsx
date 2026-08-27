@@ -23,7 +23,10 @@ export function AppLayout() {
           {profile ? (
             <span className="app__who">
               {profile.display_name}
-              <span className="app__role">{ROLE_LABELS[profile.role]}</span>
+              {/* El rol solo aporta cuando no coincide con el nombre visible. */}
+              {ROLE_LABELS[profile.role] !== profile.display_name ? (
+                <span className="app__role">{ROLE_LABELS[profile.role]}</span>
+              ) : null}
             </span>
           ) : null}
           <button type="button" className="btn btn--ghost btn--small" onClick={() => void handleSignOut()}>
@@ -44,7 +47,7 @@ export function AppLayout() {
           Tickets
         </NavLink>
         <NavLink to="/gastos/nuevo" className="tabbar__cta">
-          + Nuevo ticket
+          + Nuevo
         </NavLink>
         <NavLink to="/historico" className={navClass}>
           Historico

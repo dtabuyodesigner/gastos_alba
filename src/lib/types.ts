@@ -69,11 +69,16 @@ export const permissions = {
     if (role === 'dani' || role === 'admin') return true
     return expense.created_by === userId && expense.status === 'pendiente'
   },
-  /** Anular es la unica via de "borrado": nunca se elimina fisicamente. */
+  /**
+   * Anular es la unica via de "borrado": nunca se elimina fisicamente.
+   * Solo se anula un ticket PENDIENTE. Uno ya pagado tiene un pago asociado, y
+   * deshacerlo es una operacion deliberada en SQL, no un boton de la interfaz.
+   * Esta misma regla la aplica la funcion void_expense() en el servidor.
+   */
   canVoidExpense: (role: UserRole, userId: string, expense: Expense): boolean => {
-    if (expense.status === 'anulado') return false
+    if (expense.status !== 'pendiente') return false
     if (role === 'dani' || role === 'admin') return true
-    return expense.created_by === userId && expense.status === 'pendiente'
+    return expense.created_by === userId
   },
 } as const
 

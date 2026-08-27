@@ -59,6 +59,12 @@ export function NewExpensePage() {
     setPhoto(file)
   }
 
+  function handleCancel() {
+    const hasContent = Boolean(photo || form.concept.trim() || form.amount.trim() || form.notes.trim())
+    if (hasContent && !window.confirm('¿Descartar este ticket? Se pierde lo que has introducido.')) return
+    navigate('/gastos')
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (submitting || !profile) return
@@ -81,17 +87,14 @@ export function NewExpensePage() {
     setSubmitting(true)
     try {
       const file = photo ? await compressImage(photo) : null
-      const expense = await createExpense(
-        {
-          concept: form.concept,
-          expenseDate: form.expenseDate,
-          totalCents: parsed.cents,
-          daniPercent: form.daniPercent,
-          notes: form.notes,
-          photo: file,
-        },
-        profile.id,
-      )
+      const expense = await createExpense({
+        concept: form.concept,
+        expenseDate: form.expenseDate,
+        totalCents: parsed.cents,
+        daniPercent: form.daniPercent,
+        notes: form.notes,
+        photo: file,
+      })
       navigate(`/gastos/${expense.id}`, { replace: true })
     } catch (err) {
       setError(humanizeError(err))
@@ -148,6 +151,15 @@ export function NewExpensePage() {
 
         <button className="btn btn--primary btn--block" type="submit" disabled={submitting}>
           {submitting ? 'Guardando…' : 'Guardar ticket'}
+        </button>
+
+        <button
+          className="btn btn--ghost btn--block"
+          type="button"
+          disabled={submitting}
+          onClick={handleCancel}
+        >
+          Cancelar
         </button>
       </form>
     </div>

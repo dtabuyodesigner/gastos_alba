@@ -63,6 +63,15 @@ describe('canVoidExpense', () => {
     expect(permissions.canVoidExpense('alba', ALBA, expenseWith('pendiente', DANI))).toBe(false)
   })
 
+  it('Dani y admin anulan cualquier ticket pendiente, pero no uno pagado', () => {
+    // Un ticket pagado tiene un pago asociado: deshacerlo es una operacion
+    // deliberada en SQL, no un boton de la interfaz.
+    expect(permissions.canVoidExpense('dani', DANI, expenseWith('pendiente'))).toBe(true)
+    expect(permissions.canVoidExpense('admin', DANI, expenseWith('pendiente'))).toBe(true)
+    expect(permissions.canVoidExpense('dani', DANI, expenseWith('pagado'))).toBe(false)
+    expect(permissions.canVoidExpense('admin', DANI, expenseWith('pagado'))).toBe(false)
+  })
+
   it('nunca se puede anular dos veces', () => {
     expect(permissions.canVoidExpense('admin', DANI, expenseWith('anulado'))).toBe(false)
   })

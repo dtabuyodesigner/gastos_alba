@@ -99,8 +99,9 @@ Anular es la unica via, mediante `void_expense()`.
 historico. Un borrado accidental desde el movil no tendria vuelta atras.
 
 **Consecuencia.** Los gastos anulados siguen en la base de datos con `status = 'anulado'` y
-`voided_at`. Un ticket ya pagado no se puede anular: primero habria que deshacer el pago
-en SQL, a mano y deliberadamente.
+`voided_at`. Solo se anula un ticket **pendiente**: uno ya pagado tiene un pago asociado, y
+deshacerlo es una operacion deliberada en SQL. La interfaz aplica exactamente la misma
+regla que `void_expense()`, para no ofrecer un boton que el servidor va a rechazar.
 
 ---
 
@@ -117,18 +118,42 @@ ticket abierto mas de cinco minutos y recarga la imagen, hay que volver a firmar
 
 ---
 
-## 9. La foto se sube antes de crear el gasto
+## 9. La foto se sube antes de crear el gasto, y el gasto se crea de forma atomica
 
-**Decision.** El identificador del gasto se genera en el cliente (`crypto.randomUUID()`),
-la foto se sube a `tickets/{id}/…` y despues se inserta la fila.
+**Decision.** El identificador del gasto se genera en el cliente (`crypto.randomUUID()`), la
+foto se sube a `tickets/{id}/...` y despues una funcion `create_expense()` inserta la fila del
+gasto y la de la foto **en una sola transaccion**.
 
-**Por que.** El orden inverso deja tickets sin justificante cuando la subida falla, que en
-movil con mala cobertura es lo que mas falla. Y sin foto el ticket casi no sirve.
+**Por que.** Subir la foto al final deja tickets sin justificante cuando la subida falla, que
+en movil con mala cobertura es justo lo que mas falla. Y hacer los dos `insert` por separado
+desde el cliente permite que el segundo falle y deje un ticket visible cuya foto, ya subida,
+no esta enlazada a nada.
 
-**Consecuencia asumida.** Si la subida va bien pero el `insert` falla, queda un fichero
-huerfano en el bucket. Es invisible para las dos personas que usan la app y no cuesta
-dinero apreciable. Limpiarlo automaticamente exigiria una funcion programada; se deja
-anotado como tarea de mantenimiento, no como bug.
+**Detalle.** `create_expense()` es `SECURITY INVOKER`, no `DEFINER`: no necesita elevar
+privilegios, solo atomicidad, asi que las politicas RLS siguen aplicandose a los dos inserts.
+Ademas recalcula el reparto en el servidor a partir del total y del porcentaje, de modo que
+el cliente no puede proponer unas partes que no cuadren con el importe.
+
+**Consecuencia asumida.** Si la subida va bien pero la transaccion falla, queda un fichero
+huerfano en el bucket. Es invisible para las dos personas que usan la app y no cuesta dinero
+apreciable. Limpiarlo automaticamente exigiria una funcion programada; queda anotado como
+tarea de mantenimiento, no como bug.
+
+---
+
+## 9 bis. Un ticket con 0% para Dani se cierra sin registrar un pago
+
+**Decision.** Si el lote de tickets a liquidar suma cero, `register_payment()` marca los
+tickets como pagados y **no** crea ninguna fila en `payments`. Devuelve `null`.
+
+**Por que.** El reparto admite 0% para Dani (el documento de producto contempla
+explicitamente el caso 100/0). Sin este camino, un ticket que Dani no paga se quedaba
+`pendiente` para siempre: el importe del pago habria sido 0 y el `CHECK` de
+`payments.amount_cents > 0` lo rechazaba. Era un callejon sin salida en la interfaz.
+
+**Consecuencia.** `payment_expenses.amount_applied_cents` admite 0, para que un ticket de 0
+que se liquida junto a otros quede igualmente enlazado al pago y el rastro no se rompa. Un
+pago de 0,00 EUR nunca aparece en el historico, porque no ha movido dinero.
 
 ---
 

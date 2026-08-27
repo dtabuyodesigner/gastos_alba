@@ -31,6 +31,25 @@ describe('defaultSplit (50/50)', () => {
 })
 
 describe('computeSplit', () => {
+  it('reparte con valores exactos en los limites de un centimo', () => {
+    // Estos casos fijan el redondeo half-up. Un bucle que solo comprobara la
+    // suma seguiria en verde con cualquier formula de redondeo.
+    expect(computeSplit(1, 50)).toMatchObject({ daniShareCents: 1, otherShareCents: 0 })
+    expect(computeSplit(3, 50)).toMatchObject({ daniShareCents: 2, otherShareCents: 1 })
+    expect(computeSplit(1, 1)).toMatchObject({ daniShareCents: 0, otherShareCents: 1 })
+    expect(computeSplit(1, 99)).toMatchObject({ daniShareCents: 1, otherShareCents: 0 })
+    expect(computeSplit(5, 50)).toMatchObject({ daniShareCents: 3, otherShareCents: 2 })
+  })
+
+  it('mantiene el redondeo exacto con importes grandes', () => {
+    // 33,33% de 9.999,99 EUR = 333.299,6667 milesimas de centimo -> 333300.
+    expect(computeSplit(999999, 33.33)).toMatchObject({
+      daniShareCents: 333300,
+      otherShareCents: 666699,
+    })
+    expect(computeSplit(123457, 50)).toMatchObject({ daniShareCents: 61729, otherShareCents: 61728 })
+  })
+
   it('nunca pierde ni inventa un centimo', () => {
     for (let total = 0; total <= 500; total++) {
       for (const percent of [0, 10, 25, 33.33, 50, 66.66, 70, 99, 100]) {

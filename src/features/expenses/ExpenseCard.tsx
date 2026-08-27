@@ -18,13 +18,14 @@ export function ExpenseCard({ expense, selectable, selected, onToggle }: Expense
   return (
     <li className={`ticket ${expense.status === 'anulado' ? 'ticket--voided' : ''}`}>
       {selectable ? (
-        <input
-          type="checkbox"
-          className="ticket__check"
-          checked={Boolean(selected)}
-          onChange={() => onToggle?.(expense.id)}
-          aria-label={`Seleccionar ${expense.concept}`}
-        />
+        <label className="ticket__check">
+          <input
+            type="checkbox"
+            checked={Boolean(selected)}
+            onChange={() => onToggle?.(expense.id)}
+            aria-label={`Seleccionar ${expense.concept}`}
+          />
+        </label>
       ) : null}
 
       <Link to={`/gastos/${expense.id}`} className="ticket__body">

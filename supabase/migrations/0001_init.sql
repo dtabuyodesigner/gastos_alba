@@ -258,11 +258,81 @@ create index if not exists payments_paid_at_idx on public.payments (paid_at desc
 create table if not exists public.payment_expenses (
   payment_id           uuid not null references public.payments (id) on delete cascade,
   expense_id           uuid not null references public.expenses (id),
-  amount_applied_cents integer not null check (amount_applied_cents > 0),
+  -- Puede ser 0: un ticket reparte 0% a Dani y aun asi queda cubierto por el pago.
+  amount_applied_cents integer not null check (amount_applied_cents >= 0),
   primary key (payment_id, expense_id)
 );
 
 create index if not exists payment_expenses_expense_idx on public.payment_expenses (expense_id);
+
+-- -----------------------------------------------------------------------------
+-- create_expense — alta de gasto y foto en UNA transaccion
+--
+-- SECURITY INVOKER a proposito: no hace falta elevar privilegios, basta con la
+-- atomicidad. Asi las politicas RLS siguen aplicandose a los dos inserts.
+--
+-- El reparto lo calcula el SERVIDOR a partir del total y del porcentaje: el
+-- cliente no puede proponer unas partes que no cuadren con el importe.
+-- -----------------------------------------------------------------------------
+create or replace function public.create_expense(
+  p_id                 uuid,
+  p_concept            text,
+  p_expense_date       date,
+  p_total_amount_cents integer,
+  p_dani_percent       numeric,
+  p_notes              text   default null,
+  p_storage_path       text   default null,
+  p_original_filename  text   default null,
+  p_mime_type          text   default null,
+  p_size_bytes         bigint default null
+)
+returns uuid
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  v_id      uuid;
+  v_percent numeric(5, 2);
+  v_dani    integer;
+  v_other   integer;
+begin
+  if not public.is_active_member() then
+    raise exception 'Sin permiso.' using errcode = '42501';
+  end if;
+
+  v_id      := coalesce(p_id, gen_random_uuid());
+  v_percent := round(least(100, greatest(0, coalesce(p_dani_percent, 50))), 2);
+
+  -- Mismo redondeo que el cliente (half-up sobre la parte de Dani); la otra
+  -- parte es siempre el resto, de modo que la suma cuadra por construccion.
+  v_dani  := least(p_total_amount_cents, floor((p_total_amount_cents * v_percent) / 100 + 0.5)::integer);
+  v_other := p_total_amount_cents - v_dani;
+
+  insert into public.expenses (
+    id, created_by, expense_date, concept, total_amount_cents,
+    dani_share_cents, other_share_cents, dani_share_percent, other_share_percent,
+    split_type, status, notes
+  )
+  values (
+    v_id, auth.uid(), p_expense_date, btrim(p_concept), p_total_amount_cents,
+    v_dani, v_other, v_percent, 100 - v_percent,
+    (case when v_percent = 50 then 'mitad' else 'porcentaje' end)::public.split_type,
+    'pendiente', nullif(btrim(coalesce(p_notes, '')), '')
+  );
+
+  if nullif(btrim(coalesce(p_storage_path, '')), '') is not null then
+    insert into public.expense_photos (
+      expense_id, storage_path, original_filename, mime_type, size_bytes, uploaded_by
+    )
+    values (
+      v_id, btrim(p_storage_path), left(nullif(btrim(coalesce(p_original_filename, '')), ''), 255),
+      nullif(btrim(coalesce(p_mime_type, '')), ''), p_size_bytes, auth.uid()
+    );
+  end if;
+
+  return v_id;
+end;
+$$;
 
 -- -----------------------------------------------------------------------------
 -- register_payment — pago (agrupado o individual) en UNA transaccion
@@ -310,8 +380,13 @@ begin
   if v_count <> cardinality(v_ids) then
     raise exception 'Algun ticket no existe o ya no esta pendiente.' using errcode = '22023';
   end if;
-  if v_total <= 0 then
-    raise exception 'El importe del pago debe ser mayor que cero.' using errcode = '22023';
+  -- Un lote que suma cero (tickets con 0% para Dani) se cierra sin registrar pago:
+  -- no hay dinero que mover, y crear un pago de 0,00 EUR ensuciaria el historico.
+  if v_total = 0 then
+    perform set_config('app.allow_status_change', 'on', true);
+    update public.expenses set status = 'pagado' where id = any (v_ids);
+    perform set_config('app.allow_status_change', 'off', true);
+    return null;
   end if;
 
   insert into public.payments (paid_by, paid_at, amount_cents, method, notes)

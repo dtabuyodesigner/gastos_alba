@@ -18,6 +18,10 @@ describe('formatCents', () => {
   it('no explota con valores no finitos', () => {
     expect(formatCents(Number.NaN).replace(/\s/g, ' ')).toBe('0,00 €')
   })
+
+  it('formatea importes negativos', () => {
+    expect(formatCents(-250).replace(/\s/g, ' ')).toBe('-2,50 €')
+  })
 })
 
 describe('formatCentsPlain', () => {
@@ -33,6 +37,11 @@ describe('parseAmountToCents', () => {
   it('acepta coma decimal (formato espanol)', () => {
     expect(parseAmountToCents('12,35')).toEqual({ ok: true, cents: 1235 })
     expect(parseAmountToCents('0,05')).toEqual({ ok: true, cents: 5 })
+  })
+
+  it('acepta el importe minimo de un centimo', () => {
+    expect(parseAmountToCents('0,01')).toEqual({ ok: true, cents: 1 })
+    expect(parseAmountToCents('0.01')).toEqual({ ok: true, cents: 1 })
   })
 
   it('acepta punto decimal', () => {
@@ -52,6 +61,13 @@ describe('parseAmountToCents', () => {
     expect(parseAmountToCents('1.234,50')).toEqual({ ok: true, cents: 123450 })
     expect(parseAmountToCents('1,234.50')).toEqual({ ok: true, cents: 123450 })
     expect(parseAmountToCents('1.234')).toEqual({ ok: true, cents: 123400 })
+  })
+
+  it('la coma nunca actua como separador de miles', () => {
+    // Asimetria deliberada: '1.234' son 1.234 EUR, pero '1,234' se rechaza en
+    // vez de adivinar, porque en formato espanol la coma es decimal.
+    expect(parseAmountToCents('1,234').ok).toBe(false)
+    expect(parseAmountToCents('1.234.567').ok).toBe(false)
   })
 
   it('rechaza entradas invalidas en vez de adivinar', () => {

@@ -14,7 +14,7 @@ export async function registerPayment(params: {
   method?: string | null
   notes?: string | null
   paidAt?: string | null
-}): Promise<string> {
+}): Promise<string | null> {
   if (params.expenseIds.length === 0) throw new Error('Selecciona al menos un ticket.')
 
   const { data, error } = await supabase.rpc('register_payment', {
@@ -23,8 +23,10 @@ export async function registerPayment(params: {
     p_notes: params.notes ?? null,
     p_paid_at: params.paidAt ?? null,
   })
+  // Devuelve null cuando el lote suma cero (tickets con 0% para Dani): esos
+  // se cierran sin registrar pago porque no hay dinero que mover.
   if (error) throw error
-  return data as string
+  return (data as string | null) ?? null
 }
 
 export async function listPayments(): Promise<Payment[]> {

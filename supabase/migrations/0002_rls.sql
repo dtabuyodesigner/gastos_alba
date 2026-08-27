@@ -151,6 +151,9 @@ revoke insert, update on public.payments, public.payment_expenses from authentic
 -- -----------------------------------------------------------------------------
 -- Permisos de ejecucion de las funciones
 -- -----------------------------------------------------------------------------
+revoke all on function public.create_expense(uuid, text, date, integer, numeric, text, text, text, text, bigint) from public, anon;
+grant execute on function public.create_expense(uuid, text, date, integer, numeric, text, text, text, text, bigint) to authenticated;
+
 revoke all on function public.register_payment(uuid[], text, text, timestamptz) from public, anon;
 grant execute on function public.register_payment(uuid[], text, text, timestamptz) to authenticated;
 

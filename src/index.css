@@ -15,11 +15,11 @@
   --text-muted: #5d6b7d;
   --accent: #1d2a3a;
   --accent-contrast: #ffffff;
-  --ok: #2d9c7a;
+  --ok: #1a6b52;
   --ok-soft: #e2f4ee;
-  --warn: #b7791f;
+  --warn: #8a5a00;
   --warn-soft: #fdf3e1;
-  --danger: #c1453b;
+  --danger: #a3302a;
   --danger-soft: #fbeae9;
   --radius: 14px;
   --radius-sm: 9px;
@@ -185,6 +185,11 @@ code {
   padding: 16px 16px calc(96px + env(safe-area-inset-bottom));
 }
 
+/* Con la barra de pago agrupado visible hace falta mas hueco al final. */
+.app__main:has(.paybar) {
+  padding-bottom: calc(176px + env(safe-area-inset-bottom));
+}
+
 /* --- Barra inferior ------------------------------------------------------- */
 
 .tabbar {
@@ -204,6 +209,9 @@ code {
 
 .tabbar__link,
 .tabbar__cta {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -323,6 +331,12 @@ code {
   gap: 12px;
 }
 
+@media (max-width: 359px) {
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .input {
   width: 100%;
   min-height: var(--tap);
@@ -427,7 +441,7 @@ textarea.input {
 }
 
 .chip {
-  min-height: 38px;
+  min-height: var(--tap);
   padding: 0 14px;
   font: inherit;
   font-size: 0.88rem;
@@ -436,6 +450,13 @@ textarea.input {
   background: var(--surface);
   color: var(--text-muted);
   cursor: pointer;
+}
+
+.chip:focus-visible,
+.tabbar__link:focus-visible,
+.tabbar__cta:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .chip--active {
@@ -528,12 +549,23 @@ textarea.input {
   opacity: 0.6;
 }
 
+/* Zona pulsable completa: el input mide 22px pero la etiqueta ocupa 44px. */
 .ticket__check {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: var(--tap);
+  min-height: var(--tap);
+  margin: -4px 0 0 -8px;
+  flex: none;
+  cursor: pointer;
+}
+
+.ticket__check input {
   width: 22px;
   height: 22px;
-  margin-top: 4px;
+  margin-top: 10px;
   accent-color: var(--accent);
-  flex: none;
 }
 
 .ticket__body {
@@ -571,6 +603,11 @@ textarea.input {
   gap: 8px;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.ticket__photo {
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.04em;
 }
 
 .ticket__photo--missing {
@@ -821,6 +858,10 @@ textarea.input {
   color: var(--text-muted);
 }
 
+.spinner__label {
+  font-size: 0.9rem;
+}
+
 .spinner__dot {
   width: 18px;
   height: 18px;
@@ -837,19 +878,11 @@ textarea.input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spinner__dot {
+  .spinner__label {
+  font-size: 0.9rem;
+}
+
+.spinner__dot {
     animation: none;
   }
-}
-
-.amount {
-  font-variant-numeric: tabular-nums;
-}
-
-.amount--strong {
-  font-weight: 650;
-}
-
-.amount--muted {
-  color: var(--text-muted);
 }
