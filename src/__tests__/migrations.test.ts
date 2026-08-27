@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import initSql from '../../supabase/migrations/0001_init.sql?raw'
 import rlsSql from '../../supabase/migrations/0002_rls.sql?raw'
 import storageSql from '../../supabase/migrations/0003_storage.sql?raw'
+import updateSql from '../../supabase/migrations/0004_update_after_mvp_reviews.sql?raw'
 import { PAYMENT_METHODS } from '../features/payments/methods'
 
 /**
@@ -254,5 +255,85 @@ describe('historico de fotos', () => {
   it('el cliente no puede insertar ni marcar fotos por su cuenta', () => {
     expect(rlsSql).toMatch(/revoke insert, update on public\.expense_photos from authenticated/)
     expect(rlsSql).toMatch(/revoke delete on[\s\S]*?public\.expense_photos/)
+  })
+})
+
+describe('0004: puesta al dia de una base ya inicializada', () => {
+  /** El SQL sin lineas de comentario, para no confundir lo dicho con lo hecho. */
+  const codigo = updateSql
+    .split('\n')
+    .filter((linea) => !linea.trimStart().startsWith('--'))
+    .join('\n')
+
+  /** Nombres de todas las funciones definidas en un fichero SQL, en orden. */
+  function functionNames(sql: string): string[] {
+    return [...sql.matchAll(/create or replace function public\.(\w+)\s*\(/g)].map((m) => m[1] as string)
+  }
+
+  it('no contiene ninguna sentencia destructiva', () => {
+    // Se ejecuta sobre la base real de Dani, con sus tickets y sus fotos dentro.
+    expect(codigo).not.toMatch(/drop table/i)
+    expect(codigo).not.toMatch(/truncate/i)
+    expect(codigo).not.toMatch(/delete from/i)
+    expect(codigo).not.toMatch(/drop column/i)
+    expect(codigo).not.toMatch(/drop schema|drop database/i)
+  })
+
+  it('copia las funciones sin separarse del original', () => {
+    // Esta es la guarda que hace viable tener las definiciones por duplicado:
+    // si alguien cambia una funcion en 0001 y se olvida de 0004, la base ya
+    // inicializada se quedaria con la version antigua sin que nadie lo notara.
+    const original = [...functionNames(initSql), ...functionNames(rlsSql)]
+    const enParche = functionNames(updateSql)
+    expect([...enParche].sort()).toEqual([...original].sort())
+
+    for (const nombre of original) {
+      const fuente = initSql.includes(`create or replace function public.${nombre}(`) ? initSql : rlsSql
+      expect(functionBody(updateSql, nombre), `la copia de ${nombre} en 0004 ha divergido`).toBe(
+        functionBody(fuente, nombre),
+      )
+    }
+  })
+
+  it('aplica los cambios que un create table if not exists no puede aplicar', () => {
+    expect(codigo).toMatch(/alter table public\.expense_photos add column if not exists replaced_at/)
+    expect(codigo).toMatch(/alter table public\.expense_photos add column if not exists replaced_by/)
+    expect(codigo).toMatch(/add constraint expense_photos_replaced_consistency/)
+    expect(codigo).toMatch(/create unique index if not exists expense_photos_one_current_idx/)
+    expect(codigo).toMatch(/alter column method type public\.payment_method/)
+    expect(codigo).toMatch(/alter table public\.payments alter column method set not null/)
+    expect(codigo).toMatch(/create table if not exists public\.notifications/)
+    expect(codigo).toMatch(/create table if not exists public\.push_subscriptions/)
+  })
+
+  it('borra create_expense antes de recrearla', () => {
+    // Los parametros p_notes y p_storage_path se intercambiaron de posicion.
+    // Los tipos coinciden, asi que create or replace fallaria con
+    // "cannot change name of input parameter".
+    // Sobre el codigo, no sobre el fichero: una linea comentada no cuenta.
+    const drop = codigo.indexOf('drop function if exists public.create_expense(')
+    const create = codigo.indexOf('create or replace function public.create_expense(')
+    expect(drop).toBeGreaterThan(-1)
+    expect(drop).toBeLessThan(create)
+  })
+
+  it('retira el borrado de fotos que permitia la version antigua de 0003', () => {
+    expect(codigo).toMatch(/drop policy if exists tickets_delete_admin on storage\.objects/)
+    expect(codigo).not.toMatch(/create policy tickets_delete_admin/)
+  })
+
+  it('se puede ejecutar dos veces: todo es idempotente', () => {
+    for (const m of codigo.matchAll(/^create (?:unique )?index (?!if not exists)/gm)) {
+      throw new Error(`indice sin "if not exists": ${codigo.slice(m.index, m.index + 80)}`)
+    }
+    for (const m of codigo.matchAll(/^create table (?!if not exists)/gm)) {
+      throw new Error(`tabla sin "if not exists": ${codigo.slice(m.index, m.index + 80)}`)
+    }
+    // Toda politica creada se borra antes, para poder reejecutar el fichero.
+    for (const m of codigo.matchAll(/create policy (\w+)/g)) {
+      expect(codigo, `falta el drop previo de la politica ${m[1]}`).toContain(
+        `drop policy if exists ${m[1]}`,
+      )
+    }
   })
 })

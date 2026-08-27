@@ -80,8 +80,13 @@ Antes de que la app funcione hay que preparar el proyecto Supabase. Los pasos es
 1. `0001_init.sql` — tablas, constraints, indices, funciones y triggers.
 2. `0002_rls.sql` — Row Level Security y permisos.
 3. `0003_storage.sql` — bucket privado de fotos y sus politicas.
+4. `0004_update_after_mvp_reviews.sql` — parche idempotente **solo para bases que ya
+   ejecutaron los tres anteriores en una version antigua**.
 
-Ejecutalos en ese orden desde el SQL Editor de Supabase.
+En un proyecto nuevo ejecuta 1, 2 y 3 en ese orden desde el SQL Editor; el 4 no hace falta
+(y tampoco estorba). Si tu proyecto ya estaba creado desde antes de las ultimas revisiones,
+ejecuta **solo el 4**: reejecutar el 1 no aplicaria los cambios, porque crea las tablas con
+`create table if not exists`. El detalle esta en `docs/supabase/BOOTSTRAP.md`.
 
 ## Comandos
 

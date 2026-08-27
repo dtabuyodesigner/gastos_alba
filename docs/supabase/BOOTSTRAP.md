@@ -20,15 +20,59 @@ La `service_role` key **no se usa en este proyecto**. No la copies a ningun `.en
 
 ## 2. Ejecutar las migraciones
 
+**Hay dos situaciones distintas. Mira cual es la tuya antes de pegar nada.**
+
+### Caso A: proyecto nuevo, desde cero
+
 En **SQL Editor**, ejecuta en este orden exacto el contenido de:
 
 1. `supabase/migrations/0001_init.sql`
 2. `supabase/migrations/0002_rls.sql`
 3. `supabase/migrations/0003_storage.sql`
 
+Con eso ya tienes el esquema completo. **`0004` no hace falta**, aunque ejecutarlo no rompe
+nada: sobre una base recien creada no cambia absolutamente nada, porque todo lo que hace ya
+esta aplicado.
+
 Si el paso 3 falla por permisos sobre `storage.objects`, crea el bucket `tickets` desde
 **Storage → New bucket** con la opcion *Public* DESACTIVADA y anade las mismas politicas
 desde **Storage → Policies**.
+
+### Caso B: ya ejecutaste 0001/0002/0003 antes de las ultimas revisiones
+
+**Ejecuta unicamente `supabase/migrations/0004_update_after_mvp_reviews.sql`.**
+
+No vuelvas a empezar y no reejecutes 0001. El motivo es concreto: 0001 crea las tablas con
+`create table if not exists`, asi que sobre una base que ya las tiene **no anade las columnas
+nuevas ni cambia el tipo de `payments.method`**. Se ejecutaria entera sin dar un solo error y
+te dejaria la base a medias, que es lo peor de todo: parece que fue bien y no fue.
+
+`0004` esta escrito justo para eso:
+
+- anade lo que falta con `alter table ... add column if not exists`;
+- convierte `payments.method` de texto a enum, conservando lo que hubiera;
+- crea las tablas de avisos si no existen;
+- vuelve a definir **todas** las funciones (`create or replace` es idempotente), asi que da
+  igual por que version exacta ibas;
+- vuelve a aplicar todas las politicas y permisos;
+- retira la politica que permitia a un admin borrar fotos del bucket.
+
+**No borra ni una fila.** No hay `drop table`, ni `truncate`, ni `delete from`, ni borrado de
+fotos ni de tickets; hay un test en el repositorio que lo comprueba. Y es idempotente: si lo
+ejecutas dos veces, la segunda no hace nada.
+
+Una cosa que si cambia datos, y conviene que la sepas: **`payments.method` pasa a ser
+obligatorio**. Los pagos que ya existieran sin metodo quedan como `otro`, que significa "no
+consta". Si tenias pagos registrados y quieres afinarlos:
+
+```sql
+select id, paid_at, amount_cents, method, notes from public.payments order by paid_at;
+-- Y si recuerdas como se hizo alguno:
+-- update public.payments set method = 'bizum' where id = '<id>';
+```
+
+Despues de ejecutar `0004`, pasa la validacion del apartado 6: es la unica forma de confirmar
+que la base quedo como debe.
 
 ## 3. Cerrar el registro publico
 
