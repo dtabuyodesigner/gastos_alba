@@ -1,0 +1,23 @@
+# Dependencias
+node_modules/
+
+# Build
+dist/
+dist-ssr/
+*.local
+
+# Entorno — NUNCA commitear credenciales reales
+.env
+.env.*
+!.env.example
+
+# Editor / SO
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Herramientas
+coverage/
+*.tsbuildinfo
+.supabase/
