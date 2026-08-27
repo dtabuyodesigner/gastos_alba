@@ -6,7 +6,9 @@ import { humanizeError } from '../../lib/supabase'
 import { formatCents, parseAmountToCents, centsToInputValue } from '../../lib/money'
 import { formatIsoDate, formatTimestamp, todayIso } from '../../lib/dates'
 import { permissions } from '../../lib/types'
-import { getExpense, updateExpense, voidExpense } from './api'
+import { getExpense, replaceExpensePhoto, updateExpense, voidExpense } from './api'
+import { currentPhotos } from './photos'
+import { PhotoReplacer } from './PhotoReplacer'
 import { registerPayment } from '../payments/api'
 import { PaymentForm } from '../payments/PaymentForm'
 import type { PaymentMethod } from '../payments/methods'
@@ -27,6 +29,7 @@ export function ExpenseDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [payingOpen, setPayingOpen] = useState(false)
+  const [photoOpen, setPhotoOpen] = useState(false)
 
   useEffect(() => {
     document.title = expense ? `${expense.concept} · Gastos Alba` : 'Ticket · Gastos Alba'
@@ -54,6 +57,8 @@ export function ExpenseDetailPage() {
   const canEdit = permissions.canEditExpense(profile.role, profile.id, expense)
   const canVoid = permissions.canVoidExpense(profile.role, profile.id, expense)
   const canPay = permissions.canRegisterPayment(profile.role) && expense.status === 'pendiente'
+  const canReplacePhoto = permissions.canReplacePhoto(profile.role, profile.id, expense)
+  const photos = currentPhotos(expense.expense_photos)
 
   function startEditing() {
     if (!expense) return
@@ -101,6 +106,21 @@ export function ExpenseDetailPage() {
     try {
       await registerPayment({ expenseIds: [id], method, notes: notes || null })
       setPayingOpen(false)
+      await reload()
+    } catch (err) {
+      setActionError(humanizeError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleReplacePhoto(file: File) {
+    if (busy) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      await replaceExpensePhoto(id, file)
+      setPhotoOpen(false)
       await reload()
     } catch (err) {
       setActionError(humanizeError(err))
@@ -173,13 +193,25 @@ export function ExpenseDetailPage() {
 
           {expense.notes ? <p className="detail__notes">{expense.notes}</p> : null}
 
-          {expense.expense_photos.length > 0 ? (
-            expense.expense_photos.map((photo) => (
-              <TicketPhoto key={photo.id} storagePath={photo.storage_path} />
-            ))
+          {photos.length > 0 ? (
+            photos.map((photo) => <TicketPhoto key={photo.id} storagePath={photo.storage_path} />)
           ) : (
             <p className="muted">Este ticket no tiene foto.</p>
           )}
+
+          {canReplacePhoto && !photoOpen ? (
+            <button type="button" className="btn btn--secondary" onClick={() => setPhotoOpen(true)}>
+              Cambiar foto
+            </button>
+          ) : null}
+
+          {canReplacePhoto && photoOpen ? (
+            <PhotoReplacer
+              busy={busy}
+              onCancel={() => setPhotoOpen(false)}
+              onConfirm={(file) => void handleReplacePhoto(file)}
+            />
+          ) : null}
 
           {actionError ? <p className="alert alert--error">{actionError}</p> : null}
 

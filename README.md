@@ -17,6 +17,8 @@ despliegue con La Libreta de Marcos. El contexto de producto vive en
   el razonamiento esta en `docs/DECISIONES.md`.
 - Dani ve los tickets, su parte exacta y la marca como pagada, de una en una o en grupo,
   anotando como pago: Bizum, transferencia, efectivo u otro.
+- Si la foto sale movida o es la equivocada, se puede sustituir mientras el ticket siga
+  pendiente. La anterior no se borra: se conserva marcada como reemplazada.
 - Todo queda en un historico consultable. Nada se borra: los tickets se anulan.
 - Cada quien recibe un aviso **dentro de la aplicacion** de lo que hace la otra persona:
   Dani cuando Alba sube un ticket, Alba cuando Dani marca un pago. Con indicador de no

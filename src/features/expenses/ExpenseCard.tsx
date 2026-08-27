@@ -3,6 +3,7 @@ import type { ExpenseWithPhotos } from '../../lib/types'
 import { formatIsoDate } from '../../lib/dates'
 import { formatCents } from '../../lib/money'
 import { StatusBadge } from '../../components/StatusBadge'
+import { hasCurrentPhoto } from './photos'
 
 interface ExpenseCardProps {
   expense: ExpenseWithPhotos
@@ -13,7 +14,7 @@ interface ExpenseCardProps {
 }
 
 export function ExpenseCard({ expense, selectable, selected, onToggle }: ExpenseCardProps) {
-  const hasPhoto = expense.expense_photos.length > 0
+  const hasPhoto = hasCurrentPhoto(expense.expense_photos)
 
   return (
     <li className={`ticket ${expense.status === 'anulado' ? 'ticket--voided' : ''}`}>

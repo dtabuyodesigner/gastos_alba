@@ -36,30 +36,24 @@ describe('create_expense', () => {
     expect(body).toMatch(/set search_path = public, pg_temp/)
   })
 
-  it('rechaza el alta sin ruta de foto', () => {
-    expect(body).toMatch(/if v_path is null then\s*\n\s*raise exception/)
+  it('exige el identificador del ticket, sin el no hay con que contrastar la ruta', () => {
+    expect(body).toMatch(/if p_id is null then\s*\n\s*raise exception/)
   })
 
-  it('exige que la ruta corresponda al id del gasto', () => {
-    // Sin esto se podria enlazar como justificante la foto de otro ticket.
-    expect(body).toMatch(/v_path not like \(v_id::text \|\| '\/%'\)/)
-  })
-
-  it('comprueba que la foto existe de verdad en Storage y es de quien crea el gasto', () => {
-    // El bypass que cerro esta guarda: llamar a la RPC con una ruta inventada.
-    expect(body).toMatch(/from storage\.objects/)
-    expect(body).toMatch(/o\.bucket_id = 'tickets'/)
-    expect(body).toMatch(/o\.name = v_path/)
-    expect(body).toMatch(/o\.owner = auth\.uid\(\)/)
+  it('delega la regla del justificante en el helper compartido', () => {
+    // Extraida a assert_ticket_photo() para que create_expense() y
+    // replace_expense_photo() no puedan divergir: si cada una llevara su copia,
+    // bastaria con que un camino se quedara atras.
+    expect(body).toMatch(/public\.assert_ticket_photo\(v_id, p_storage_path\)/)
   })
 
   it('comprueba la foto ANTES de insertar nada', () => {
     // El orden es lo que garantiza que un fallo no deje un gasto a medias.
-    const storageCheck = body.indexOf('from storage.objects')
+    const check = body.indexOf('assert_ticket_photo')
     const insertExpense = body.indexOf('insert into public.expenses')
     const insertPhoto = body.indexOf('insert into public.expense_photos')
-    expect(storageCheck).toBeGreaterThan(-1)
-    expect(storageCheck).toBeLessThan(insertExpense)
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(insertExpense)
     expect(insertExpense).toBeLessThan(insertPhoto)
   })
 
@@ -71,7 +65,8 @@ describe('create_expense', () => {
 
 describe('permisos de las migraciones', () => {
   it('el alta de gastos y fotos solo pasa por create_expense', () => {
-    expect(rlsSql).toMatch(/revoke insert on public\.expenses, public\.expense_photos from authenticated/)
+    expect(rlsSql).toMatch(/revoke insert on public\.expenses from authenticated/)
+    expect(rlsSql).toMatch(/revoke insert, update on public\.expense_photos from authenticated/)
     expect(rlsSql).not.toMatch(/create policy expenses_insert_members/)
     expect(rlsSql).not.toMatch(/create policy expense_photos_insert_members/)
   })
@@ -192,5 +187,72 @@ describe('metodo de pago', () => {
     const insert = body.indexOf('insert into public.payments')
     expect(guard).toBeGreaterThan(-1)
     expect(guard).toBeLessThan(insert)
+  })
+})
+
+describe('assert_ticket_photo', () => {
+  const body = functionBody(initSql, 'assert_ticket_photo')
+
+  it('exige ruta, que corresponda al ticket, y que la foto exista y sea tuya', () => {
+    expect(body).toMatch(/v_path is null/)
+    expect(body).toMatch(/v_path not like \(p_expense_id::text \|\| '\/%'\)/)
+    expect(body).toMatch(/from storage\.objects/)
+    expect(body).toMatch(/o\.bucket_id = 'tickets'/)
+    expect(body).toMatch(/o\.name = v_path/)
+    expect(body).toMatch(/o\.owner = auth\.uid\(\)/)
+  })
+
+  it('es interna: nadie puede ejecutarla desde fuera', () => {
+    expect(rlsSql).toMatch(/revoke all on function public\.assert_ticket_photo\([\s\S]*?from public, anon, authenticated/)
+    expect(rlsSql).not.toMatch(/grant execute on function public\.assert_ticket_photo/)
+  })
+})
+
+describe('sustituir la foto de un ticket', () => {
+  const body = functionBody(initSql, 'replace_expense_photo')
+
+  it('solo en tickets pendientes', () => {
+    expect(body).toMatch(/v_expense\.status <> 'pendiente'/)
+  })
+
+  it('comprueba el permiso sobre ese ticket concreto', () => {
+    expect(body).toMatch(/v_role not in \('dani', 'admin'\) and v_expense\.created_by <> auth\.uid\(\)/)
+  })
+
+  it('reutiliza la regla del justificante', () => {
+    expect(body).toMatch(/public\.assert_ticket_photo\(p_expense_id, p_storage_path\)/)
+  })
+
+  it('marca la anterior como reemplazada en vez de borrarla', () => {
+    expect(body).toMatch(/set replaced_at = now\(\)/)
+    expect(body).not.toMatch(/delete from/)
+    // Y la marca ANTES de insertar la nueva, para no romper el indice unico.
+    expect(body.indexOf('set replaced_at')).toBeLessThan(body.indexOf('insert into public.expense_photos'))
+  })
+
+  it('es SECURITY DEFINER, con search_path fijado y solo para authenticated', () => {
+    expect(body).toMatch(/security definer/)
+    expect(body).toMatch(/set search_path = public, pg_temp/)
+    expect(rlsSql).toMatch(/grant execute on function public\.replace_expense_photo\([^)]*\) to authenticated/)
+    expect(rlsSql).toMatch(/revoke all on function public\.replace_expense_photo\([^)]*\) from public, anon/)
+  })
+})
+
+describe('historico de fotos', () => {
+  it('un ticket no puede tener dos fotos vigentes', () => {
+    expect(initSql).toMatch(
+      /create unique index if not exists expense_photos_one_current_idx[\s\S]*?where replaced_at is null/,
+    )
+  })
+
+  it('de una foto solo se puede marcar que fue reemplazada, y una sola vez', () => {
+    const guard = functionBody(initSql, 'expense_photos_guard_update')
+    expect(guard).toMatch(/to_jsonb\(new\) - 'replaced_at' - 'replaced_by'/)
+    expect(guard).toMatch(/old\.replaced_at is not null/)
+  })
+
+  it('el cliente no puede insertar ni marcar fotos por su cuenta', () => {
+    expect(rlsSql).toMatch(/revoke insert, update on public\.expense_photos from authenticated/)
+    expect(rlsSql).toMatch(/revoke delete on[\s\S]*?public\.expense_photos/)
   })
 })

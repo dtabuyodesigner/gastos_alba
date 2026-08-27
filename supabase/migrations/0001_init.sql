@@ -242,10 +242,166 @@ create table if not exists public.expense_photos (
   mime_type         text,
   size_bytes        bigint check (size_bytes is null or size_bytes >= 0),
   uploaded_by       uuid not null references public.profiles (id),
-  created_at        timestamptz not null default now()
+  created_at        timestamptz not null default now(),
+  -- Si Alba se equivoca de foto puede sustituirla, pero la anterior NO se borra:
+  -- se queda aqui y en el bucket, marcada con quien y cuando la reemplazo.
+  -- Una foto con `replaced_at` puesto deja de ser la vigente del ticket.
+  replaced_at       timestamptz,
+  replaced_by       uuid references public.profiles (id),
+  constraint expense_photos_replaced_consistency
+    check ((replaced_at is null) = (replaced_by is null))
 );
 
 create index if not exists expense_photos_expense_idx on public.expense_photos (expense_id);
+
+-- Un ticket tiene como mucho UNA foto vigente. El invariante vive aqui y no en
+-- la aplicacion: asi no depende de que la funcion de sustitucion sea correcta.
+create unique index if not exists expense_photos_one_current_idx
+  on public.expense_photos (expense_id) where replaced_at is null;
+
+-- De una foto solo puede marcarse que ha sido reemplazada, y solo una vez. El
+-- resto de columnas son inmutables: un justificante no se reescribe.
+create or replace function public.expense_photos_guard_update()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if (to_jsonb(new) - 'replaced_at' - 'replaced_by')
+     is distinct from (to_jsonb(old) - 'replaced_at' - 'replaced_by') then
+    raise exception 'De una foto solo se puede marcar que ha sido reemplazada.' using errcode = '42501';
+  end if;
+  if old.replaced_at is not null then
+    raise exception 'Una foto ya reemplazada no vuelve a cambiar.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists expense_photos_guard on public.expense_photos;
+create trigger expense_photos_guard
+  before update on public.expense_photos
+  for each row execute function public.expense_photos_guard_update();
+
+-- -----------------------------------------------------------------------------
+-- assert_ticket_photo — la regla del justificante, en un unico sitio
+--
+-- La usan create_expense() y replace_expense_photo(). Esta extraida a proposito:
+-- si cada una llevara su propia copia, bastaria con que uno de los dos caminos
+-- se quedara atras para poder colar un ticket con una foto que no existe.
+--
+-- Uso interno: no se concede EXECUTE a nadie.
+-- -----------------------------------------------------------------------------
+create or replace function public.assert_ticket_photo(p_expense_id uuid, p_storage_path text)
+returns text
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_path text;
+begin
+  v_path := nullif(btrim(coalesce(p_storage_path, '')), '');
+  if v_path is null then
+    raise exception 'Un ticket necesita la foto del justificante.' using errcode = '22023';
+  end if;
+  if p_expense_id is null then
+    raise exception 'Falta el identificador del ticket.' using errcode = '22023';
+  end if;
+
+  -- La ruta sigue la convencion {id-del-gasto}/{fichero}. Sin esto se podria
+  -- enlazar como justificante la foto de otro ticket.
+  if v_path not like (p_expense_id::text || '/%') then
+    raise exception 'La ruta de la foto no corresponde a este ticket.' using errcode = '22023';
+  end if;
+
+  -- Y la foto tiene que EXISTIR de verdad y haberla subido quien esta actuando.
+  -- Sin esta comprobacion bastaria con inventarse una ruta para tener un ticket
+  -- con metadatos de foto pero sin foto.
+  --
+  -- El nombre del bucket va fijo: debe coincidir con 0003_storage.sql y con
+  -- VITE_SUPABASE_TICKETS_BUCKET en el cliente.
+  if not exists (
+    select 1
+      from storage.objects o
+     where o.bucket_id = 'tickets'
+       and o.name = v_path
+       and o.owner = auth.uid()
+  ) then
+    raise exception 'La foto del ticket no existe o no la has subido tu.' using errcode = '22023';
+  end if;
+
+  return v_path;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- replace_expense_photo — sustituir la foto sin borrar la anterior
+--
+-- Solo en tickets PENDIENTES: una vez pagado o anulado, el justificante forma
+-- parte del acuerdo y no se toca. La foto anterior se conserva en la tabla y en
+-- el bucket, marcada con `replaced_at` y `replaced_by`, coherente con el "sin
+-- borrado destructivo" del resto del proyecto.
+-- -----------------------------------------------------------------------------
+create or replace function public.replace_expense_photo(
+  p_expense_id        uuid,
+  p_storage_path      text,
+  p_original_filename text   default null,
+  p_mime_type         text   default null,
+  p_size_bytes        bigint default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_expense  public.expenses%rowtype;
+  v_role     public.user_role;
+  v_path     text;
+  v_photo_id uuid;
+begin
+  v_role := public.current_role_name();
+  if v_role is null then
+    raise exception 'Sin permiso.' using errcode = '42501';
+  end if;
+
+  select * into v_expense from public.expenses where id = p_expense_id for update;
+  if not found then
+    raise exception 'El ticket no existe.' using errcode = '22023';
+  end if;
+
+  if v_expense.status <> 'pendiente' then
+    raise exception 'Solo se puede cambiar la foto de un ticket pendiente.' using errcode = '22023';
+  end if;
+
+  -- Mismo criterio que para editar el gasto: Dani y admin, cualquiera;
+  -- quien lo subio, el suyo.
+  if v_role not in ('dani', 'admin') and v_expense.created_by <> auth.uid() then
+    raise exception 'Solo puedes cambiar la foto de tus propios tickets.' using errcode = '42501';
+  end if;
+
+  v_path := public.assert_ticket_photo(p_expense_id, p_storage_path);
+
+  -- La anterior NO se borra: deja de ser la vigente y se queda como historico.
+  update public.expense_photos
+     set replaced_at = now(),
+         replaced_by = auth.uid()
+   where expense_id = p_expense_id
+     and replaced_at is null;
+
+  insert into public.expense_photos (
+    expense_id, storage_path, original_filename, mime_type, size_bytes, uploaded_by
+  )
+  values (
+    p_expense_id, v_path, left(nullif(btrim(coalesce(p_original_filename, '')), ''), 255),
+    nullif(btrim(coalesce(p_mime_type, '')), ''), p_size_bytes, auth.uid()
+  )
+  returning id into v_photo_id;
+
+  return v_photo_id;
+end;
+$$;
 
 -- -----------------------------------------------------------------------------
 -- payments / payment_expenses — un pago puede cubrir varios tickets
@@ -557,12 +713,6 @@ begin
     raise exception 'Sin permiso.' using errcode = '42501';
   end if;
 
-  -- La foto es obligatoria: sin justificante no hay ticket.
-  v_path := nullif(btrim(coalesce(p_storage_path, '')), '');
-  if v_path is null then
-    raise exception 'Un ticket necesita la foto del justificante.' using errcode = '22023';
-  end if;
-
   -- El identificador lo genera el cliente antes de subir la foto, porque la
   -- ruta en Storage se agrupa por gasto. Sin el no se puede comprobar que la
   -- ruta corresponda a ESTE ticket, asi que aqui es obligatorio.
@@ -571,29 +721,9 @@ begin
   end if;
   v_id := p_id;
 
-  -- La ruta tiene que seguir la convencion {id-del-gasto}/{fichero}. Sin esto,
-  -- se podria enlazar como justificante la foto de otro ticket.
-  if v_path not like (v_id::text || '/%') then
-    raise exception 'La ruta de la foto no corresponde a este ticket.' using errcode = '22023';
-  end if;
-
-  -- Y la foto tiene que EXISTIR de verdad y haberla subido quien crea el gasto.
-  -- Sin esta comprobacion, bastaba con llamar a esta funcion con una ruta
-  -- inventada para crear un ticket con metadatos de foto pero sin foto: el
-  -- justificante seria una ficcion y el detalle del gasto mostraria un error de
-  -- carga en su lugar.
-  --
-  -- El nombre del bucket va fijo aqui: debe coincidir con el de 0003_storage.sql
-  -- y con VITE_SUPABASE_TICKETS_BUCKET en el cliente.
-  if not exists (
-    select 1
-      from storage.objects o
-     where o.bucket_id = 'tickets'
-       and o.name = v_path
-       and o.owner = auth.uid()
-  ) then
-    raise exception 'La foto del ticket no existe o no la has subido tu.' using errcode = '22023';
-  end if;
+  -- La foto es obligatoria, tiene que existir de verdad en Storage y ser de
+  -- este ticket. La regla completa vive en assert_ticket_photo().
+  v_path := public.assert_ticket_photo(v_id, p_storage_path);
 
   v_percent := round(least(100, greatest(0, coalesce(p_dani_percent, 50))), 2);
 

@@ -141,9 +141,10 @@ create policy expense_photos_select_members on public.expense_photos
   for select to authenticated
   using (public.is_active_member());
 
--- Sin politica INSERT: las fotos se enlazan dentro de create_expense(), en la
--- misma transaccion que el gasto. Sin UPDATE ni DELETE: un justificante no se
--- reescribe ni se borra.
+-- Sin politica INSERT: las fotos se enlazan dentro de create_expense() y de
+-- replace_expense_photo(). Sin UPDATE: marcar una foto como reemplazada solo
+-- ocurre dentro de esa funcion. Sin DELETE: un justificante no se borra nunca,
+-- ni siquiera al sustituirlo.
 drop policy if exists expense_photos_insert_members on public.expense_photos;
 
 -- -----------------------------------------------------------------------------
@@ -164,8 +165,10 @@ create policy payment_expenses_select_members on public.payment_expenses
 
 revoke insert, update on public.payments, public.payment_expenses from authenticated;
 
--- Alta de gastos y de fotos: solo a traves de create_expense().
-revoke insert on public.expenses, public.expense_photos from authenticated;
+-- Alta de gastos: solo a traves de create_expense(). Alta y marcado de fotos:
+-- solo a traves de create_expense() y replace_expense_photo().
+revoke insert on public.expenses from authenticated;
+revoke insert, update on public.expense_photos from authenticated;
 
 -- -----------------------------------------------------------------------------
 -- notifications
@@ -241,6 +244,14 @@ grant execute on function public.current_display_name() to authenticated;
 -- register_payment(), que corren como su propietario. Si el cliente pudiera
 -- ejecutarla, podria fabricar avisos falsos a nombre de otra persona.
 revoke all on function public.notify_role(public.user_role, public.notification_type, text, text, uuid, uuid)
+  from public, anon, authenticated;
+
+revoke all on function public.replace_expense_photo(uuid, text, text, text, bigint) from public, anon;
+grant execute on function public.replace_expense_photo(uuid, text, text, text, bigint) to authenticated;
+
+-- assert_ticket_photo es de uso interno: la llaman create_expense() y
+-- replace_expense_photo(), que corren como su propietario.
+revoke all on function public.assert_ticket_photo(uuid, text)
   from public, anon, authenticated;
 
 revoke all on function public.create_expense(uuid, text, date, integer, numeric, text, text, text, text, bigint) from public, anon;

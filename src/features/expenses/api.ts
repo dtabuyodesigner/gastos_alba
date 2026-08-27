@@ -1,7 +1,7 @@
 import { supabase } from '../../lib/supabase'
 import type { Expense, ExpenseStatus, ExpenseWithPhotos } from '../../lib/types'
 import { computeSplit, isConsistentSplit, DEFAULT_DANI_PERCENT } from '../../lib/split'
-import { uploadTicketPhoto } from '../photos/api'
+import { compressImage, uploadTicketPhoto, validatePhoto } from '../photos/api'
 
 const EXPENSE_COLUMNS = '*, expense_photos(*)'
 
@@ -96,6 +96,31 @@ export async function createExpense(input: CreateExpenseInput): Promise<Expense>
   const created = await getExpense(id)
   if (!created) throw new Error('El ticket se ha creado pero no se ha podido leer.')
   return created
+}
+
+/**
+ * Sustituye la foto de un ticket pendiente.
+ *
+ * La anterior NO se borra: `replace_expense_photo()` la marca como reemplazada
+ * y la deja donde esta, en la tabla y en el bucket. La funcion vuelve a
+ * comprobar en el servidor que el ticket sigue pendiente, que quien llama puede
+ * editarlo y que la foto nueva existe de verdad en Storage.
+ */
+export async function replaceExpensePhoto(expenseId: string, photo: File): Promise<void> {
+  const problem = validatePhoto(photo)
+  if (problem) throw new Error(problem)
+
+  const file = await compressImage(photo)
+  const storagePath = await uploadTicketPhoto(expenseId, file)
+
+  const { error } = await supabase.rpc('replace_expense_photo', {
+    p_expense_id: expenseId,
+    p_storage_path: storagePath,
+    p_original_filename: file.name.slice(0, 255),
+    p_mime_type: file.type || null,
+    p_size_bytes: file.size,
+  })
+  if (error) throw error
 }
 
 export interface UpdateExpenseInput {

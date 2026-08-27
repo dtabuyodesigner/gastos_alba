@@ -385,6 +385,39 @@ escrito.
 
 ---
 
+## 17. La foto se puede sustituir, pero la anterior no se borra
+
+**Decision.** En un ticket **pendiente** se puede cambiar la foto. La anterior no desaparece:
+se queda en la tabla y en el bucket con `replaced_at` y `replaced_by` puestos, y deja de ser
+la vigente. No existe "borrar la foto" a secas.
+
+**Por que hacia falta.** Alba fotografia tickets con el movil, a veces con prisa y a
+contraluz. Si sale movida o es la equivocada, hasta ahora la unica salida era anular el ticket
+y volver a crearlo entero. Eso es fricción real en el uso diario, y ademas ensuciaba el
+historico con anulaciones que no eran anulaciones de verdad.
+
+**Solo pendientes, y esto es mas estricto que editar.** Un ticket pagado o anulado no cambia
+de foto ni siquiera para Dani, que si puede corregirle el importe (decision 7). La razon: una
+vez pagado, el justificante forma parte de lo acordado; cambiarlo despues seria reescribir la
+prueba de algo ya cerrado. `canReplacePhoto` en el cliente y `replace_expense_photo()` en el
+servidor aplican exactamente la misma regla.
+
+**El invariante vive en la base de datos.** Un indice unico parcial
+(`expense_photos_one_current_idx`, sobre `expense_id where replaced_at is null`) garantiza que
+un ticket no pueda tener dos fotos vigentes. No depende de que la funcion de sustitucion sea
+correcta: aunque tuviera un fallo, Postgres lo impediria.
+
+**Y la regla del justificante esta en un solo sitio.** `create_expense()` y
+`replace_expense_photo()` comparten `assert_ticket_photo()`: ruta con la convencion del
+ticket, objeto que existe de verdad en Storage y `owner = auth.uid()`. Si cada una llevara su
+copia, bastaria con que un camino se quedara atras para poder colar una foto inexistente por
+la puerta nueva. Es de uso interno y no tiene `EXECUTE` para nadie.
+
+**Sin marcha atras.** Una foto ya reemplazada no se puede des-reemplazar: el trigger lo
+impide. El historico de justificantes es de solo avance.
+
+---
+
 ## Anotado para mas adelante (no construido)
 
 - OCR del ticket para prerrellenar importe y fecha, siempre corregible a mano.
@@ -395,7 +428,10 @@ escrito.
 - Avisos de tickets pendientes acumulados, y resumen mensual.
 - Email, WhatsApp y Telegram como canales de aviso: descartados, no pendientes (decision 13).
 - Limpieza programada de ficheros huerfanos en el bucket (ver decision 9). Hoy es una tarea
-  manual desde el panel de Supabase, no un flujo de la aplicacion.
+  manual desde el panel de Supabase, no un flujo de la aplicacion. Las fotos sustituidas
+  (decision 17) NO son huerfanas: se conservan a proposito y no deben limpiarse.
+- Ver en la interfaz las fotos anteriores de un ticket. Hoy se guardan y son consultables por
+  SQL, pero el detalle solo muestra la vigente, que es lo que hace falta para decidir un pago.
 - Excepcion "gasto sin justificante", para un ticket perdido o un pago sin comprobante (ver
   decision 9 ter). Fuera de alcance a proposito en esta version.
 - Pago real dentro de la aplicacion, integracion con Bizum, con un banco o con una pasarela:

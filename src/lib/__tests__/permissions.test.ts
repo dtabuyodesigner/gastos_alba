@@ -56,6 +56,29 @@ describe('canEditExpense', () => {
   })
 })
 
+describe('canReplacePhoto', () => {
+  it('solo se cambia la foto de un ticket pendiente', () => {
+    expect(permissions.canReplacePhoto('alba', ALBA, expenseWith('pendiente'))).toBe(true)
+    expect(permissions.canReplacePhoto('alba', ALBA, expenseWith('pagado'))).toBe(false)
+    expect(permissions.canReplacePhoto('alba', ALBA, expenseWith('anulado'))).toBe(false)
+  })
+
+  it('es mas estricto que editar: Dani puede corregir un pagado pero no su foto', () => {
+    // Una vez pagado, el justificante forma parte del acuerdo.
+    expect(permissions.canEditExpense('dani', DANI, expenseWith('pagado'))).toBe(true)
+    expect(permissions.canReplacePhoto('dani', DANI, expenseWith('pagado'))).toBe(false)
+  })
+
+  it('Dani y admin pueden cambiar la foto de cualquier pendiente', () => {
+    expect(permissions.canReplacePhoto('dani', DANI, expenseWith('pendiente'))).toBe(true)
+    expect(permissions.canReplacePhoto('admin', DANI, expenseWith('pendiente'))).toBe(true)
+  })
+
+  it('Alba no toca la foto de un ticket ajeno', () => {
+    expect(permissions.canReplacePhoto('alba', ALBA, expenseWith('pendiente', DANI))).toBe(false)
+  })
+})
+
 describe('canVoidExpense', () => {
   it('Alba solo anula sus tickets pendientes', () => {
     expect(permissions.canVoidExpense('alba', ALBA, expenseWith('pendiente'))).toBe(true)

@@ -47,6 +47,9 @@ export interface ExpensePhoto {
   size_bytes: number | null
   uploaded_by: string
   created_at: string
+  /** Puesto cuando esta foto ha sido sustituida por otra. No se borra nunca. */
+  replaced_at: string | null
+  replaced_by: string | null
 }
 
 export interface Payment {
@@ -87,6 +90,18 @@ export const permissions = {
     if (role === 'dani' || role === 'admin') return true
     return expense.created_by === userId && expense.status === 'pendiente'
   },
+  /**
+   * Sustituir la foto solo en tickets PENDIENTES: una vez pagado o anulado, el
+   * justificante forma parte del acuerdo y no se toca. Es mas estricto que
+   * `canEditExpense`, que deja a Dani corregir un ticket ya pagado.
+   * La funcion replace_expense_photo() aplica la misma regla en el servidor.
+   */
+  canReplacePhoto: (role: UserRole, userId: string, expense: Expense): boolean => {
+    if (expense.status !== 'pendiente') return false
+    if (role === 'dani' || role === 'admin') return true
+    return expense.created_by === userId
+  },
+
   /**
    * Anular es la unica via de "borrado": nunca se elimina fisicamente.
    * Solo se anula un ticket PENDIENTE. Uno ya pagado tiene un pago asociado, y

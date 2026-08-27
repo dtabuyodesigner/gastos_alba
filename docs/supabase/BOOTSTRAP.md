@@ -86,7 +86,7 @@ falta: el rol `dani` ya puede corregir y pagar cualquier ticket.
 > politicas RLS, el bucket y las funciones RPC estan escritas y revisadas, pero no se han
 > probado contra un Supabase real porque el proyecto todavia no existe. Esta seccion es la
 > lista de comprobacion que hay que completar **entera** antes de compartir la URL con
-> nadie. Hasta que las 12 casillas esten marcadas, la aplicacion no esta validada.
+> nadie. Hasta que las 13 casillas esten marcadas, la aplicacion no esta validada.
 >
 > El push del navegador no entra en esta lista porque **no esta implementado**: ver el
 > apartado "Push del navegador" mas abajo.
@@ -126,6 +126,7 @@ with esperado(nombre, seguridad, authenticated_puede) as (values
   ('void_expense',                'DEFINER', true),
   ('mark_notification_read',      'DEFINER', true),
   ('mark_all_notifications_read', 'DEFINER', true),
+  ('replace_expense_photo',        'DEFINER', true),
   -- Ayudantes de autorizacion y de texto
   ('is_active_member',            'DEFINER', true),
   ('current_role_name',           'DEFINER', true),
@@ -134,6 +135,7 @@ with esperado(nombre, seguridad, authenticated_puede) as (values
   ('format_cents_es',             'INVOKER', true),
   -- Uso interno: NO deben ser ejecutables por el cliente
   ('notify_role',                 'DEFINER', false),
+  ('assert_ticket_photo',         'DEFINER', false),
   ('payment_method_phrase',       'INVOKER', false),
   -- Alta de usuario y guardas (funciones de trigger)
   ('handle_new_user',             'DEFINER', true),
@@ -141,6 +143,7 @@ with esperado(nombre, seguridad, authenticated_puede) as (values
   ('expenses_guard_update',       'INVOKER', true),
   ('profiles_guard_update',       'INVOKER', true),
   ('notifications_guard_update',  'INVOKER', true),
+  ('expense_photos_guard_update', 'INVOKER', true),
   ('push_subscriptions_guard_update', 'INVOKER', true)
 )
 select e.nombre,
@@ -166,7 +169,10 @@ select e.nombre,
  order by (veredicto <> 'ok') desc, e.nombre;
 ```
 
-**La fila que hay que mirar con mas atencion es `notify_role`.** Es la que fabrica los avisos:
+**Dos filas hay que mirar con mas atencion: `notify_role` y `assert_ticket_photo`.** Ambas son
+internas y deben salir con `puede_authenticated = false`.
+
+**Sobre `notify_role`:** Es la que fabrica los avisos:
 si `puede_authenticated` sale `true`, cualquiera con la clave anon podria inventarse un aviso
 de "pago registrado" a nombre de otra persona. Debe salir `false`.
 
@@ -193,7 +199,9 @@ select 'funcion', p.proname
                          'current_display_name','format_cents_es','notify_role',
                          'payment_method_phrase','handle_new_user','touch_updated_at',
                          'expenses_guard_update','profiles_guard_update',
-                         'notifications_guard_update','push_subscriptions_guard_update')
+                         'notifications_guard_update','push_subscriptions_guard_update',
+                         'replace_expense_photo','assert_ticket_photo',
+                         'expense_photos_guard_update')
  order by 1, 2;
 ```
 
@@ -569,6 +577,91 @@ await supabase.from('push_subscriptions').delete().eq('id', UN_ID) // debe falla
 ```
 
 **Esperado:** la primera devuelve vacio; las otras dos fallan.
+
+### 13. Sustituir la foto de un ticket
+
+**13.1 Cambiar la foto de un pendiente funciona.** Como Alba, abre un ticket pendiente, pulsa
+"Cambiar foto", elige otra imagen y guarda. El detalle debe mostrar **solo la nueva**.
+
+**13.2 La anterior sigue existiendo.** Esto es lo importante: no se ha borrado nada.
+
+```sql
+select storage_path, created_at, replaced_at, replaced_by
+  from public.expense_photos
+ where expense_id = '<id-del-ticket>'
+ order by created_at;
+```
+
+**Esperado:** dos filas. La antigua con `replaced_at` y `replaced_by` puestos; la nueva con
+ambos a null. Y el fichero antiguo debe seguir en el bucket:
+
+```sql
+select name from storage.objects
+ where bucket_id = 'tickets' and name like '<id-del-ticket>/%'
+ order by created_at;
+```
+
+**Esperado:** los dos ficheros, el viejo incluido. Si falta alguno, algo esta borrando fotos y
+eso no debe ocurrir nunca.
+
+**13.3 Un ticket no puede tener dos fotos vigentes.** El indice unico parcial lo impide:
+
+```sql
+select expense_id, count(*)
+  from public.expense_photos where replaced_at is null
+ group by expense_id having count(*) > 1;
+```
+
+**Esperado:** ninguna fila.
+
+**13.4 En un ticket pagado no se puede.** Como Dani, marca un ticket como pagado y comprueba
+que el boton "Cambiar foto" **ya no aparece**. Y que tampoco funciona por RPC:
+
+```js
+await supabase.rpc('replace_expense_photo', { p_expense_id: ID_PAGADO,
+  p_storage_path: `${ID_PAGADO}/loquesea.jpg` })
+```
+
+**Esperado:** `Solo se puede cambiar la foto de un ticket pendiente`. Repitelo con un ticket
+anulado: mismo resultado.
+
+**13.5 Sin permiso sobre ese ticket, no.** Crea un ticket como Dani y, desde la sesion de
+Alba, intenta cambiarle la foto por RPC.
+
+**Esperado:** `Solo puedes cambiar la foto de tus propios tickets`.
+
+**13.6 Ruta falsa o ajena, tampoco.** Como Alba, sobre un ticket pendiente suyo:
+
+```js
+// Ruta que no existe en Storage
+await supabase.rpc('replace_expense_photo', { p_expense_id: ID,
+  p_storage_path: `${ID}/inventada.jpg` })
+
+// Ruta real pero de otro ticket
+await supabase.rpc('replace_expense_photo', { p_expense_id: ID,
+  p_storage_path: 'OTRO_ID/prueba.jpg' })
+```
+
+**Esperado:** la primera responde `La foto del ticket no existe o no la has subido tu`; la
+segunda, `La ruta de la foto no corresponde a este ticket`. En ambos casos el ticket debe
+**conservar su foto original**, sin quedar a medias:
+
+```sql
+select count(*) from public.expense_photos
+ where expense_id = '<ID>' and replaced_at is null;
+```
+
+**Esperado:** exactamente 1.
+
+**13.7 El cliente no puede marcar fotos por su cuenta.** Como Alba, en consola:
+
+```js
+await supabase.from('expense_photos').update({ replaced_at: new Date().toISOString() }).eq('id', UNA_FOTO)
+await supabase.from('expense_photos').delete().eq('id', UNA_FOTO)
+await supabase.rpc('assert_ticket_photo', { p_expense_id: ID, p_storage_path: 'x' })
+```
+
+**Esperado:** las tres fallan por permiso denegado.
 
 ### Cuando termines
 
