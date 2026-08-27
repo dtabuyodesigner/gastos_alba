@@ -189,6 +189,26 @@ comprobacion. Como contrapartida, la funcion pasa a ser `SECURITY DEFINER` y asu
 misma las comprobaciones que antes hacian las politicas: perfil activo y `created_by`
 forzado a `auth.uid()`.
 
+**Y no basta con recibir una ruta.** Comprobar solo que `p_storage_path` no viene vacio deja
+otro hueco: una llamada manual a la RPC con una ruta inventada crea un ticket con metadatos
+de foto pero **sin foto real**. El justificante seria una ficcion, y el detalle del gasto
+mostraria un error de carga donde deberia estar la imagen. Antes de insertar nada,
+`create_expense()` comprueba tres cosas:
+
+1. que la ruta empiece por `{id-del-gasto}/`, la convencion que usa el cliente, de modo que
+   no se pueda enlazar como justificante la foto de otro ticket;
+2. que exista una fila en `storage.objects` con ese `name` en el bucket `tickets`;
+3. que su `owner` sea `auth.uid()`, es decir, que la subiera quien esta creando el gasto.
+
+Si falla cualquiera de las tres, no se crea ni el gasto ni la fila de la foto. Que la
+comprobacion vaya **antes** de los `insert` es parte de la decision, no un detalle de
+estilo. Como efecto secundario, `p_id` pasa a ser obligatorio: sin el no hay con que
+contrastar la ruta.
+
+**Contrapartida.** El nombre del bucket queda escrito en la funcion. Si algun dia cambia,
+hay que tocarlo en tres sitios a la vez: esta funcion, `0003_storage.sql` y
+`VITE_SUPABASE_TICKETS_BUCKET`. Esta anotado en el propio SQL.
+
 **Consecuencia.** El caso "gasto sin justificante" (un pago del que no hay ticket, o un
 ticket perdido) **no existe** en esta version, y es deliberado. Si algun dia hace falta,
 entra como excepcion explicita y visible —con su propio estado o marca—, nunca como un campo

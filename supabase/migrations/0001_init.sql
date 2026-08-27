@@ -274,8 +274,12 @@ create index if not exists payment_expenses_expense_idx on public.payment_expens
 -- delegaba en las politicas: perfil activo y autoria forzada a auth.uid().
 --
 -- La foto del ticket es OBLIGATORIA en el MVP: un gasto sin justificante no se
--- puede dar de alta por ninguna via. Si algun dia hace falta la excepcion
--- "gasto sin justificante", entra por aqui y de forma explicita.
+-- puede dar de alta por ninguna via. Y no basta con recibir una ruta: la funcion
+-- comprueba que el objeto EXISTE en Storage, que lo subio quien crea el gasto y
+-- que su ruta corresponde a este ticket. De lo contrario, una llamada manual a
+-- la RPC con una ruta inventada crearia un ticket cuyo justificante no existe.
+-- Si algun dia hace falta la excepcion "gasto sin justificante", entra por aqui
+-- y de forma explicita.
 --
 -- El reparto lo calcula el SERVIDOR a partir del total y del porcentaje: el
 -- cliente no puede proponer unas partes que no cuadren con el importe.
@@ -314,7 +318,38 @@ begin
     raise exception 'Un ticket necesita la foto del justificante.' using errcode = '22023';
   end if;
 
-  v_id      := coalesce(p_id, gen_random_uuid());
+  -- El identificador lo genera el cliente antes de subir la foto, porque la
+  -- ruta en Storage se agrupa por gasto. Sin el no se puede comprobar que la
+  -- ruta corresponda a ESTE ticket, asi que aqui es obligatorio.
+  if p_id is null then
+    raise exception 'Falta el identificador del ticket.' using errcode = '22023';
+  end if;
+  v_id := p_id;
+
+  -- La ruta tiene que seguir la convencion {id-del-gasto}/{fichero}. Sin esto,
+  -- se podria enlazar como justificante la foto de otro ticket.
+  if v_path not like (v_id::text || '/%') then
+    raise exception 'La ruta de la foto no corresponde a este ticket.' using errcode = '22023';
+  end if;
+
+  -- Y la foto tiene que EXISTIR de verdad y haberla subido quien crea el gasto.
+  -- Sin esta comprobacion, bastaba con llamar a esta funcion con una ruta
+  -- inventada para crear un ticket con metadatos de foto pero sin foto: el
+  -- justificante seria una ficcion y el detalle del gasto mostraria un error de
+  -- carga en su lugar.
+  --
+  -- El nombre del bucket va fijo aqui: debe coincidir con el de 0003_storage.sql
+  -- y con VITE_SUPABASE_TICKETS_BUCKET en el cliente.
+  if not exists (
+    select 1
+      from storage.objects o
+     where o.bucket_id = 'tickets'
+       and o.name = v_path
+       and o.owner = auth.uid()
+  ) then
+    raise exception 'La foto del ticket no existe o no la has subido tu.' using errcode = '22023';
+  end if;
+
   v_percent := round(least(100, greatest(0, coalesce(p_dani_percent, 50))), 2);
 
   -- Mismo redondeo que el cliente (half-up sobre la parte de Dani); la otra

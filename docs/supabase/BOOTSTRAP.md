@@ -147,29 +147,82 @@ tambien que la API lo bloquea, no solo la interfaz: desde el navegador de esa se
 consola, `await (await fetch(SUPABASE_URL + '/rest/v1/expenses?select=*', { headers: { apikey: ANON_KEY, Authorization: 'Bearer ' + TOKEN }})).json()`
 debe devolver `[]`. Al terminar, borra la cuenta de prueba.
 
-### 5. La foto es obligatoria de verdad
+### 5. La foto es obligatoria de verdad, y tiene que existir
 
 En la interfaz, como Alba: el boton de guardar aparece desactivado con el texto "Anade la
 foto para guardar" mientras no haya foto.
 
-Y la regla tambien tiene que sostenerse sin pasar por la interfaz. Como Alba, en la consola
-del navegador:
+Pero la regla tiene que sostenerse tambien **sin pasar por la interfaz**. Estas cinco
+llamadas son el nucleo de esta comprobacion. Ejecutalas como Alba, desde la consola del
+navegador con la sesion abierta.
 
 ```js
-// Alta sin foto: debe fallar
-await supabase.rpc('create_expense', {
-  p_id: crypto.randomUUID(), p_concept: 'Prueba sin foto',
-  p_expense_date: '2026-08-27', p_total_amount_cents: 1000,
-  p_dani_percent: 50, p_storage_path: null,
-})
-// Insert directo saltandose la funcion: tambien debe fallar
+const id = crypto.randomUUID()
+const base = { p_concept: 'Prueba', p_expense_date: '2026-08-27',
+               p_total_amount_cents: 1000, p_dani_percent: 50 }
+
+// 5.1 Sin ruta de foto -> debe fallar
+await supabase.rpc('create_expense', { ...base, p_id: id, p_storage_path: null })
+
+// 5.2 Ruta inventada, sin fichero detras -> debe fallar
+await supabase.rpc('create_expense', { ...base, p_id: id, p_storage_path: `${id}/falsa.jpg` })
+
+// 5.3 Insert directo saltandose la funcion -> debe fallar
 await supabase.from('expenses').insert({ concept: 'x', expense_date: '2026-08-27',
   total_amount_cents: 1000, dani_share_cents: 500, other_share_cents: 500 })
 ```
 
-**Esperado:** la primera responde `Un ticket necesita la foto del justificante`; la segunda
-falla por permiso denegado (el `INSERT` directo esta revocado). Si la segunda funcionara, la
-obligatoriedad de la foto seria solo decorativa.
+**Esperado:**
+
+| Caso | Respuesta esperada |
+|---|---|
+| 5.1 | `Un ticket necesita la foto del justificante` |
+| 5.2 | `La foto del ticket no existe o no la has subido tu` |
+| 5.3 | Permiso denegado: el `INSERT` directo esta revocado |
+
+Ahora sube un fichero de verdad y prueba los dos casos que quedan:
+
+```js
+const otroId = crypto.randomUUID()
+const blob = new Blob([new Uint8Array([255,216,255,224,0,16,74,70,73,70,0])], { type: 'image/jpeg' })
+await supabase.storage.from('tickets').upload(`${otroId}/prueba.jpg`, blob)
+
+// 5.4 Foto real, pero la ruta pertenece a OTRO ticket -> debe fallar
+await supabase.rpc('create_expense', { ...base, p_id: crypto.randomUUID(),
+  p_storage_path: `${otroId}/prueba.jpg` })
+
+// 5.5 Foto real y ruta correcta -> debe funcionar
+await supabase.rpc('create_expense', { ...base, p_id: otroId,
+  p_storage_path: `${otroId}/prueba.jpg` })
+```
+
+**Esperado:**
+
+| Caso | Respuesta esperada |
+|---|---|
+| 5.4 | `La ruta de la foto no corresponde a este ticket` |
+| 5.5 | Devuelve el UUID del gasto creado |
+
+Comprueba ademas que **la comprobacion ocurre antes de crear nada**: despues de los fallos
+5.1, 5.2, 5.3 y 5.4, no debe haber aparecido ningun gasto ni ninguna fila de foto.
+
+```sql
+select count(*) as gastos from public.expenses;
+select count(*) as fotos  from public.expense_photos;
+```
+
+**Esperado:** un unico gasto (el de 5.5) con una unica foto. Si hubiera mas, la funcion esta
+insertando antes de validar.
+
+Una comprobacion mas, esta como **Dani**, para verificar que la foto tiene que haberla
+subido quien crea el gasto: pidele a Alba la ruta de una foto suya recien subida e intenta
+crear un gasto con ella desde la sesion de Dani. **Esperado:** `La foto del ticket no existe
+o no la has subido tu`.
+
+> Estas comprobaciones tienen una guarda estatica en `src/__tests__/migrations.test.ts`, que
+> verifica que las defensas siguen escritas en el SQL y en el orden correcto. Pero ese test
+> **no ejecuta Postgres**: solo lee el texto de las migraciones. Lo unico que demuestra que
+> las reglas funcionan es esta seccion, ejecutada contra el proyecto real.
 
 ### 6. Alta completa y reparto correcto
 
