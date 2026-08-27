@@ -268,8 +268,14 @@ create index if not exists payment_expenses_expense_idx on public.payment_expens
 -- -----------------------------------------------------------------------------
 -- create_expense — alta de gasto y foto en UNA transaccion
 --
--- SECURITY INVOKER a proposito: no hace falta elevar privilegios, basta con la
--- atomicidad. Asi las politicas RLS siguen aplicandose a los dos inserts.
+-- Es la UNICA via para dar de alta un gasto: el permiso de INSERT directo sobre
+-- `expenses` y `expense_photos` esta revocado (ver 0002_rls.sql). Por eso la
+-- funcion es SECURITY DEFINER y hace ella misma las comprobaciones que antes
+-- delegaba en las politicas: perfil activo y autoria forzada a auth.uid().
+--
+-- La foto del ticket es OBLIGATORIA en el MVP: un gasto sin justificante no se
+-- puede dar de alta por ninguna via. Si algun dia hace falta la excepcion
+-- "gasto sin justificante", entra por aqui y de forma explicita.
 --
 -- El reparto lo calcula el SERVIDOR a partir del total y del porcentaje: el
 -- cliente no puede proponer unas partes que no cuadren con el importe.
@@ -280,24 +286,32 @@ create or replace function public.create_expense(
   p_expense_date       date,
   p_total_amount_cents integer,
   p_dani_percent       numeric,
+  p_storage_path       text,
   p_notes              text   default null,
-  p_storage_path       text   default null,
   p_original_filename  text   default null,
   p_mime_type          text   default null,
   p_size_bytes         bigint default null
 )
 returns uuid
 language plpgsql
+security definer
 set search_path = public, pg_temp
 as $$
 declare
   v_id      uuid;
+  v_path    text;
   v_percent numeric(5, 2);
   v_dani    integer;
   v_other   integer;
 begin
   if not public.is_active_member() then
     raise exception 'Sin permiso.' using errcode = '42501';
+  end if;
+
+  -- La foto es obligatoria: sin justificante no hay ticket.
+  v_path := nullif(btrim(coalesce(p_storage_path, '')), '');
+  if v_path is null then
+    raise exception 'Un ticket necesita la foto del justificante.' using errcode = '22023';
   end if;
 
   v_id      := coalesce(p_id, gen_random_uuid());
@@ -320,15 +334,13 @@ begin
     'pendiente', nullif(btrim(coalesce(p_notes, '')), '')
   );
 
-  if nullif(btrim(coalesce(p_storage_path, '')), '') is not null then
-    insert into public.expense_photos (
-      expense_id, storage_path, original_filename, mime_type, size_bytes, uploaded_by
-    )
-    values (
-      v_id, btrim(p_storage_path), left(nullif(btrim(coalesce(p_original_filename, '')), ''), 255),
-      nullif(btrim(coalesce(p_mime_type, '')), ''), p_size_bytes, auth.uid()
-    );
-  end if;
+  insert into public.expense_photos (
+    expense_id, storage_path, original_filename, mime_type, size_bytes, uploaded_by
+  )
+  values (
+    v_id, v_path, left(nullif(btrim(coalesce(p_original_filename, '')), ''), 255),
+    nullif(btrim(coalesce(p_mime_type, '')), ''), p_size_bytes, auth.uid()
+  );
 
   return v_id;
 end;

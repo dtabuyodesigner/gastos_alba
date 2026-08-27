@@ -10,7 +10,11 @@ despliegue con La Libreta de Marcos. El contexto de producto vive en
 ## Que hace
 
 - Alba entra desde el movil y sube la foto de un ticket con importe, concepto y fecha.
-- El reparto por defecto es 50/50 y se puede ajustar por gasto.
+  La foto es obligatoria: sin justificante no se puede guardar un ticket.
+- El reparto por defecto es 50/50 y se puede ajustar por gasto. Cuando el reparto no da un
+  numero exacto de centimos, **el centimo suelto lo asume siempre Dani** (en un ticket de
+  12,35 € al 50%: 6,18 € Dani y 6,17 € la otra parte). Es una simplificacion deliberada;
+  el razonamiento esta en `docs/DECISIONES.md`.
 - Dani ve los tickets, su parte exacta y la marca como pagada, de una en una o en grupo.
 - Todo queda en un historico consultable. Nada se borra: los tickets se anulan.
 

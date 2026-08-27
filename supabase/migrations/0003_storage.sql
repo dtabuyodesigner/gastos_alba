@@ -37,9 +37,12 @@ create policy tickets_upload_members on storage.objects
     and owner = auth.uid()
   );
 
--- Sin UPDATE: una foto subida no se sobrescribe.
--- Solo un admin puede borrar un fichero, y siempre fuera del flujo normal.
+-- Sin UPDATE y sin DELETE, para nadie: una foto de ticket es un justificante y
+-- no se sobrescribe ni se borra desde la aplicacion, igual que no se borra un
+-- gasto (se anula). Ni siquiera un admin tiene politica de borrado.
+--
+-- La limpieza de ficheros huerfanos (subidas cuya alta de gasto fallo despues)
+-- es una tarea de mantenimiento manual, deliberada y fuera de la app: se hace
+-- desde el panel de Supabase o con la service_role key, nunca desde el cliente.
+-- Ver docs/DECISIONES.md.
 drop policy if exists tickets_delete_admin on storage.objects;
-create policy tickets_delete_admin on storage.objects
-  for delete to authenticated
-  using (bucket_id = 'tickets' and public.current_role_name() = 'admin');

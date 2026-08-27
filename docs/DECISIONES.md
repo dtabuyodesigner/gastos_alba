@@ -17,17 +17,23 @@ persona (`parseAmountToCents`) y al pintar (`formatCents`). Nunca en medio.
 
 ---
 
-## 2. El redondeo del reparto va siempre a la parte de Dani
+## 2. En un reparto impar, el centimo suelto lo asume Dani
 
 **Decision.** `dani = round_half_up(total × porcentaje / 100)` y `otra_parte = total − dani`.
+Dicho en una frase: **cuando el reparto no da un numero exacto de centimos, el que sobra se
+lo lleva la parte de Dani**, siempre, sin alternancia ni excepciones.
 
 **Por que.** Con 12,35 € al 50% tocan 617,5 centimos por cabeza y el centimo suelto tiene
-que ir a algun sitio. Repartirlo de forma determinista y siempre igual es preferible a
-alternarlo: es explicable en una frase y hace que `dani + otra = total` se cumpla por
-construccion, no por comprobacion posterior.
+que ir a algun sitio. Elegir un destino fijo es preferible a alternarlo: es explicable en
+una frase, es reproducible, y hace que `dani + otra = total` se cumpla por construccion en
+vez de por comprobacion posterior. Se elige la parte de Dani, y no la otra, porque Dani es
+quien ve y valida los importes en la aplicacion: quien asume el redondeo es quien puede
+comprobarlo.
 
-**Consecuencia.** En importes impares Dani paga un centimo de mas. En un ticket de 12,35 €
-eso es 0,00081 % del importe. Queda cubierto por tests y por un `CHECK` en la base de datos.
+**Consecuencia.** En importes impares Dani paga un centimo de mas: en un ticket de 12,35 €
+son 6,18 € frente a 6,17 €, un 0,00081 % del importe. La regla esta fijada con valores
+exactos en `src/lib/__tests__/split.test.ts`, replicada en la funcion `create_expense()` del
+servidor y respaldada por el `CHECK` `expenses_shares_match_total`.
 
 ---
 
@@ -98,7 +104,8 @@ Anular es la unica via, mediante `void_expense()`.
 **Por que.** Lo pide el documento de producto, y con razon: el valor de la app esta en el
 historico. Un borrado accidental desde el movil no tendria vuelta atras.
 
-**Consecuencia.** Los gastos anulados siguen en la base de datos con `status = 'anulado'` y
+**Consecuencia.** Tampoco hay borrado en Storage: el bucket de fotos no tiene politica
+`DELETE`. Los gastos anulados siguen en la base de datos con `status = 'anulado'` y
 `voided_at`. Solo se anula un ticket **pendiente**: uno ya pagado tiene un pago asociado, y
 deshacerlo es una operacion deliberada en SQL. La interfaz aplica exactamente la misma
 regla que `void_expense()`, para no ofrecer un boton que el servidor va a rechazar.
@@ -115,6 +122,11 @@ ultimos digitos de una tarjeta. Es el dato mas sensible de la aplicacion.
 
 **Consecuencia.** Una URL filtrada caduca sola. A cambio, si alguien deja el detalle de un
 ticket abierto mas de cinco minutos y recarga la imagen, hay que volver a firmarla.
+
+**Y tampoco se borran.** El bucket no tiene ninguna politica `DELETE`, para nadie: ni para un
+admin. Una foto de ticket es un justificante, y aplica el mismo criterio que a los gastos
+(decision 7). La limpieza de ficheros huerfanos es mantenimiento manual desde el panel de
+Supabase, deliberado y fuera de la aplicacion; no un flujo operativo.
 
 ---
 
@@ -154,6 +166,50 @@ explicitamente el caso 100/0). Sin este camino, un ticket que Dani no paga se qu
 **Consecuencia.** `payment_expenses.amount_applied_cents` admite 0, para que un ticket de 0
 que se liquida junto a otros quede igualmente enlazado al pago y el rastro no se rompa. Un
 pago de 0,00 EUR nunca aparece en el historico, porque no ha movido dinero.
+
+---
+
+## 9 ter. La foto del ticket es obligatoria
+
+**Decision.** No se puede dar de alta un gasto sin foto. La regla se aplica en tres capas: el
+boton de guardar esta desactivado sin foto, `createExpense` exige `photo: File` (no
+opcional, no nullable), y `create_expense()` rechaza en el servidor cualquier alta sin
+`p_storage_path`.
+
+**Por que.** El MVP existe para sustituir un flujo de WhatsApp por un registro con
+justificante. Un ticket sin foto es una cifra que nadie puede comprobar despues: justo lo
+que ya se tenia. Permitirlo "por comodidad" habria erosionado el unico rasgo que hace util
+la aplicacion.
+
+**Detalle importante.** Para que la regla del servidor no sea decorativa, `create_expense()`
+es la **unica** via de alta: se ha revocado el permiso de `INSERT` directo sobre `expenses`
+y `expense_photos`, y se han retirado sus politicas de insercion. Sin eso, cualquiera con la
+clave anon podria crear un ticket sin foto llamando a PostgREST a mano, saltandose la
+comprobacion. Como contrapartida, la funcion pasa a ser `SECURITY DEFINER` y asume ella
+misma las comprobaciones que antes hacian las politicas: perfil activo y `created_by`
+forzado a `auth.uid()`.
+
+**Consecuencia.** El caso "gasto sin justificante" (un pago del que no hay ticket, o un
+ticket perdido) **no existe** en esta version, y es deliberado. Si algun dia hace falta,
+entra como excepcion explicita y visible —con su propio estado o marca—, nunca como un campo
+opcional que se cuela por descuido.
+
+---
+
+## 9 quater. Un perfil solo puede cambiarse el nombre visible
+
+**Decision.** El trigger `profiles_guard_update()` usa lista blanca: quien no es admin solo
+puede modificar `display_name`. Cualquier otra columna, incluida `email`, queda bloqueada.
+`role` e `is_active` siguen siendo exclusivos de un admin, y `id` y `created_at` son
+inmutables para todo el mundo.
+
+**Por que.** La politica de RLS permite a cada persona actualizar su propia fila, pero eso es
+demasiado grueso: `email` lo gestiona Supabase Auth, y dejar que el cliente lo reescriba
+desconectaria la fila de `profiles` de la cuenta real, con la que se resuelve el acceso.
+
+**Detalle.** La comprobacion no enumera columnas: compara la fila entera convertida a JSON
+quitando `display_name` y `updated_at`. Asi, cualquier campo que se anada en el futuro queda
+protegido por omision en lugar de quedar abierto por descuido.
 
 ---
 
@@ -203,4 +259,7 @@ las mismas variables. Todo el diseno cabe en un fichero legible de una sentada.
 - Repartos por importe fijo, ademas de por porcentaje.
 - Varios hijos o varios nucleos (`household_id`, ver decision 3).
 - Avisos de tickets pendientes acumulados.
-- Limpieza programada de ficheros huerfanos en el bucket (ver decision 9).
+- Limpieza programada de ficheros huerfanos en el bucket (ver decision 9). Hoy es una tarea
+  manual desde el panel de Supabase, no un flujo de la aplicacion.
+- Excepcion "gasto sin justificante", para un ticket perdido o un pago sin comprobante (ver
+  decision 9 ter). Fuera de alcance a proposito en esta version.

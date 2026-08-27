@@ -41,20 +41,22 @@ export interface CreateExpenseInput {
   totalCents: number
   daniPercent: number
   notes?: string
-  photo?: File | null
+  /** Obligatoria: no se da de alta un ticket sin justificante. */
+  photo: File
 }
 
 /**
- * Crea un gasto con su foto.
+ * Crea un gasto con su foto. La foto es OBLIGATORIA.
  *
  * Orden deliberado: primero se sube la foto y despues se crea el gasto, para no
  * dejar tickets sin justificante si la subida falla (que en movil con mala
  * cobertura es lo que mas falla).
  *
  * La fila del gasto y la de la foto se insertan mediante la funcion
- * `create_expense`, que las mete en UNA transaccion: nunca queda un ticket
- * visible cuya foto no este enlazada. El reparto lo recalcula el servidor a
- * partir del total y del porcentaje.
+ * `create_expense`, unica via de alta: el permiso de INSERT directo sobre
+ * `expenses` esta revocado. Las dos filas entran en UNA transaccion, asi que
+ * nunca queda un ticket visible cuya foto no este enlazada. El reparto lo
+ * recalcula el servidor a partir del total y del porcentaje.
  *
  * Contrapartida asumida: si la subida va bien pero la insercion falla, queda un
  * fichero huerfano en el bucket (ver docs/DECISIONES.md).
@@ -72,12 +74,10 @@ export async function createExpense(input: CreateExpenseInput): Promise<Expense>
     throw new Error('El reparto no cuadra con el importe total.')
   }
 
-  const id = crypto.randomUUID()
+  if (!input.photo) throw new Error('Un ticket necesita la foto del justificante.')
 
-  let storagePath: string | null = null
-  if (input.photo) {
-    storagePath = await uploadTicketPhoto(id, input.photo)
-  }
+  const id = crypto.randomUUID()
+  const storagePath = await uploadTicketPhoto(id, input.photo)
 
   const { error } = await supabase.rpc('create_expense', {
     p_id: id,
@@ -87,9 +87,9 @@ export async function createExpense(input: CreateExpenseInput): Promise<Expense>
     p_dani_percent: split.daniPercent,
     p_notes: input.notes?.trim() || null,
     p_storage_path: storagePath,
-    p_original_filename: input.photo ? input.photo.name.slice(0, 255) : null,
-    p_mime_type: input.photo?.type || null,
-    p_size_bytes: input.photo?.size ?? null,
+    p_original_filename: input.photo.name.slice(0, 255),
+    p_mime_type: input.photo.type || null,
+    p_size_bytes: input.photo.size,
   })
   if (error) throw error
 

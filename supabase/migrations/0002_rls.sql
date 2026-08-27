@@ -53,14 +53,40 @@ returns trigger
 language plpgsql
 set search_path = public, pg_temp
 as $$
+declare
+  v_is_admin boolean;
 begin
-  if (old.role is distinct from new.role or old.is_active is distinct from new.is_active)
-     and coalesce(public.current_role_name()::text, '') <> 'admin' then
-    raise exception 'Solo un administrador puede cambiar el rol o la activacion.' using errcode = '42501';
-  end if;
+  v_is_admin := coalesce(public.current_role_name()::text, '') = 'admin';
+
+  -- Inmutables para todo el mundo, admin incluido.
   if old.id is distinct from new.id then
     raise exception 'El identificador no se puede cambiar.' using errcode = '42501';
   end if;
+  if old.created_at is distinct from new.created_at then
+    raise exception 'created_at no se puede cambiar.' using errcode = '42501';
+  end if;
+
+  -- El rol y la activacion son cosa exclusiva de un admin.
+  if (old.role is distinct from new.role or old.is_active is distinct from new.is_active)
+     and not v_is_admin then
+    raise exception 'Solo un administrador puede cambiar el rol o la activacion.' using errcode = '42501';
+  end if;
+
+  -- Lista blanca para quien no es admin: `display_name` y nada mas.
+  --
+  -- Se compara la fila entera en JSON en vez de enumerar columnas, para que
+  -- cualquier campo que se anada en el futuro quede protegido por omision en
+  -- lugar de quedar abierto por descuido. `email` se incluye aqui: lo gestiona
+  -- Supabase Auth, y dejar que el cliente lo reescriba desconectaria la fila de
+  -- `profiles` de la cuenta real. `updated_at` se excluye porque lo reescribe
+  -- siempre el trigger `profiles_touch_updated_at`.
+  if not v_is_admin then
+    if (to_jsonb(new) - 'display_name' - 'updated_at')
+       is distinct from (to_jsonb(old) - 'display_name' - 'updated_at') then
+      raise exception 'Solo puedes cambiar tu nombre visible.' using errcode = '42501';
+    end if;
+  end if;
+
   return new;
 end;
 $$;
@@ -82,15 +108,10 @@ create policy expenses_select_members on public.expenses
   for select to authenticated
   using (public.is_active_member());
 
+-- Sin politica INSERT: los gastos se dan de alta EXCLUSIVAMENTE con
+-- create_expense(), que exige la foto del justificante. Un insert directo
+-- permitiria saltarse esa regla y crear tickets sin foto.
 drop policy if exists expenses_insert_members on public.expenses;
-create policy expenses_insert_members on public.expenses
-  for insert to authenticated
-  with check (
-    public.is_active_member()
-    and created_by = auth.uid()
-    and status = 'pendiente'
-    and voided_at is null
-  );
 
 drop policy if exists expenses_update_scoped on public.expenses;
 create policy expenses_update_scoped on public.expenses
@@ -116,19 +137,10 @@ create policy expense_photos_select_members on public.expense_photos
   for select to authenticated
   using (public.is_active_member());
 
+-- Sin politica INSERT: las fotos se enlazan dentro de create_expense(), en la
+-- misma transaccion que el gasto. Sin UPDATE ni DELETE: un justificante no se
+-- reescribe ni se borra.
 drop policy if exists expense_photos_insert_members on public.expense_photos;
-create policy expense_photos_insert_members on public.expense_photos
-  for insert to authenticated
-  with check (
-    public.is_active_member()
-    and uploaded_by = auth.uid()
-    and exists (
-      select 1 from public.expenses e
-      where e.id = expense_id and e.status <> 'anulado'
-    )
-  );
-
--- Sin UPDATE ni DELETE: un justificante no se reescribe ni se borra.
 
 -- -----------------------------------------------------------------------------
 -- payments / payment_expenses
@@ -147,6 +159,9 @@ create policy payment_expenses_select_members on public.payment_expenses
   using (public.is_active_member());
 
 revoke insert, update on public.payments, public.payment_expenses from authenticated;
+
+-- Alta de gastos y de fotos: solo a traves de create_expense().
+revoke insert on public.expenses, public.expense_photos from authenticated;
 
 -- -----------------------------------------------------------------------------
 -- Permisos de ejecucion de las funciones

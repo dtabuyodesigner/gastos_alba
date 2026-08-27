@@ -7,8 +7,14 @@
  * Reglas de redondeo, explicitas a proposito:
  *  1. La parte de Dani se calcula con redondeo half-up sobre el porcentaje.
  *  2. La otra parte es SIEMPRE el resto (total - parte de Dani).
+ *
  * De esta forma `dani + otra === total` se cumple por construccion y jamas se
- * pierde ni se inventa un centimo por redondeo.
+ * pierde ni se inventa un centimo por redondeo. La consecuencia, asumida y
+ * documentada en docs/DECISIONES.md: cuando el reparto no da un numero exacto
+ * de centimos, EL CENTIMO SUELTO LO ASUME DANI (12,35 € al 50% -> 6,18 € Dani y
+ * 6,17 € la otra parte). Siempre en el mismo sentido, sin alternancia.
+ *
+ * La funcion create_expense() del servidor replica esta misma formula.
  */
 
 export const DEFAULT_DANI_PERCENT = 50

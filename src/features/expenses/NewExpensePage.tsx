@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { humanizeError } from '../../lib/supabase'
 import { parseAmountToCents } from '../../lib/money'
+import { validateExpenseDraft } from './validation'
 import { DEFAULT_DANI_PERCENT } from '../../lib/split'
 import { todayIso } from '../../lib/dates'
 import { createExpense } from './api'
@@ -70,23 +71,24 @@ export function NewExpensePage() {
     if (submitting || !profile) return
     setError(null)
 
-    if (!form.concept.trim()) {
-      setError('Escribe un concepto.')
-      return
-    }
-    const parsed = parseAmountToCents(form.amount)
-    if (!parsed.ok) {
-      setError(parsed.error)
-      return
-    }
-    if (!form.expenseDate) {
-      setError('Indica la fecha del ticket.')
+    const problem = validateExpenseDraft({
+      concept: form.concept,
+      amount: form.amount,
+      expenseDate: form.expenseDate,
+      hasPhoto: photo !== null,
+    })
+    if (problem) {
+      setError(problem)
       return
     }
 
+    // validateExpenseDraft ya ha comprobado los dos, pero TypeScript no lo sabe.
+    const parsed = parseAmountToCents(form.amount)
+    if (!parsed.ok || !photo) return
+
     setSubmitting(true)
     try {
-      const file = photo ? await compressImage(photo) : null
+      const file = await compressImage(photo)
       const expense = await createExpense({
         concept: form.concept,
         expenseDate: form.expenseDate,
@@ -111,7 +113,7 @@ export function NewExpensePage() {
           {previewUrl ? (
             <img className="photo-picker__preview" src={previewUrl} alt="Vista previa del ticket" />
           ) : (
-            <p className="photo-picker__hint">Anade la foto del ticket</p>
+            <p className="photo-picker__hint">Foto del ticket · obligatoria</p>
           )}
 
           <input
@@ -149,8 +151,8 @@ export function NewExpensePage() {
           </p>
         ) : null}
 
-        <button className="btn btn--primary btn--block" type="submit" disabled={submitting}>
-          {submitting ? 'Guardando…' : 'Guardar ticket'}
+        <button className="btn btn--primary btn--block" type="submit" disabled={submitting || !photo}>
+          {submitting ? 'Guardando…' : photo ? 'Guardar ticket' : 'Anade la foto para guardar'}
         </button>
 
         <button
