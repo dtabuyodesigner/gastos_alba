@@ -109,3 +109,49 @@ describe('reparto', () => {
     expect(initSql).toMatch(/dani_share_cents \+ other_share_cents = total_amount_cents/)
   })
 })
+
+describe('notificaciones', () => {
+  it('el buzon es estrictamente personal', () => {
+    expect(rlsSql).toMatch(/create policy notifications_select_own[\s\S]*?recipient_profile_id = auth\.uid\(\)/)
+    expect(rlsSql).toMatch(/create policy notifications_update_own[\s\S]*?recipient_profile_id = auth\.uid\(\)/)
+  })
+
+  it('el cliente no puede fabricar avisos ni borrarlos', () => {
+    // Sin esto se podria inventar un aviso de "pago registrado" que no ocurrio.
+    expect(rlsSql).toMatch(/revoke insert on public\.notifications from authenticated/)
+    expect(rlsSql).toMatch(/revoke delete on[\s\S]*?public\.notifications/)
+    expect(rlsSql).not.toMatch(/create policy notifications_insert/)
+  })
+
+  it('notify_role no es ejecutable por nadie desde fuera', () => {
+    expect(rlsSql).toMatch(/revoke all on function public\.notify_role\([\s\S]*?from public, anon, authenticated/)
+    expect(rlsSql).not.toMatch(/grant execute on function public\.notify_role/)
+  })
+
+  it('de un aviso solo se puede cambiar si esta leido', () => {
+    const guard = functionBody(initSql, 'notifications_guard_update')
+    expect(guard).toMatch(/to_jsonb\(new\) - 'read_at'/)
+  })
+
+  it('nadie se avisa a si mismo de lo que acaba de hacer', () => {
+    const notify = functionBody(initSql, 'notify_role')
+    expect(notify).toMatch(/p\.id is distinct from auth\.uid\(\)/)
+    expect(notify).toMatch(/p\.is_active/)
+  })
+
+  it('los avisos se generan dentro de las funciones de alta y de pago', () => {
+    expect(functionBody(initSql, 'create_expense')).toMatch(/notify_role\(\s*\n?\s*'dani'/)
+    expect(functionBody(initSql, 'register_payment')).toMatch(/'alba'/)
+  })
+})
+
+describe('suscripciones push', () => {
+  it('cada usuario solo ve y toca las suyas', () => {
+    for (const policy of ['select', 'insert', 'update']) {
+      expect(rlsSql).toMatch(
+        new RegExp(`create policy push_subscriptions_${policy}_own[\\s\\S]*?profile_id = auth\\.uid\\(\\)`),
+      )
+    }
+    expect(rlsSql).not.toMatch(/create policy push_subscriptions_delete/)
+  })
+})

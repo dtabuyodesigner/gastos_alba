@@ -86,7 +86,10 @@ falta: el rol `dani` ya puede corregir y pagar cualquier ticket.
 > politicas RLS, el bucket y las funciones RPC estan escritas y revisadas, pero no se han
 > probado contra un Supabase real porque el proyecto todavia no existe. Esta seccion es la
 > lista de comprobacion que hay que completar **entera** antes de compartir la URL con
-> nadie. Hasta que las 11 casillas esten marcadas, la aplicacion no esta validada.
+> nadie. Hasta que las 12 casillas esten marcadas, la aplicacion no esta validada.
+>
+> El push del navegador no entra en esta lista porque **no esta implementado**: ver el
+> apartado "Push del navegador" mas abajo.
 
 Necesitas dos navegadores o dos ventanas privadas para poder estar como Alba y como Dani a
 la vez. Anota el resultado de cada punto.
@@ -202,6 +205,22 @@ await supabase.rpc('create_expense', { ...base, p_id: otroId,
 |---|---|
 | 5.4 | `La ruta de la foto no corresponde a este ticket` |
 | 5.5 | Devuelve el UUID del gasto creado |
+
+> **Si 5.5 falla, mira esto antes que nada.** `create_expense()` comprueba
+> `storage.objects.owner = auth.uid()`. En algunas versiones de Supabase Storage esa columna
+> convive con `owner_id` (texto) y `owner` puede quedar a null. Si 5.5 devuelve
+> `La foto del ticket no existe o no la has subido tu` **aun subiendo tu la foto**, comprueba
+> que columna se rellena en tu proyecto:
+>
+> ```sql
+> select name, owner, owner_id from storage.objects
+>  where bucket_id = 'tickets' order by created_at desc limit 3;
+> ```
+>
+> Si `owner` viene a null y `owner_id` tiene el uuid, hay que cambiar la comprobacion de
+> `create_expense()` (y la politica `tickets_upload_members` de `0003_storage.sql`, que usa
+> el mismo criterio) a `o.owner_id = auth.uid()::text`. No lo cambies a ciegas: hazlo solo si
+> esta consulta lo confirma.
 
 Comprueba ademas que **la comprobacion ocurre antes de crear nada**: despues de los fallos
 5.1, 5.2, 5.3 y 5.4, no debe haber aparecido ningun gasto ni ninguna fila de foto.
@@ -331,6 +350,89 @@ await supabase.from('profiles').update({ is_active: true }).eq('id', OTRO_ID)   
 **Esperado:** solo la primera funciona. Las otras responden `Solo puedes cambiar tu nombre
 visible` o `Solo un administrador puede cambiar el rol o la activacion`.
 
+### 12. Notificaciones dentro de la aplicacion
+
+Con las dos sesiones abiertas a la vez, una como Alba y otra como Dani.
+
+**12.1 Alba sube un ticket → Dani recibe aviso.** Como Alba, crea un ticket. Como Dani,
+recarga: el indicador de la cabecera debe mostrar un numero, y en Notificaciones debe
+aparecer `Alba ha subido un ticket de 12,35 €` con el concepto debajo. Al pulsarlo, debe
+abrirse ese ticket y el aviso quedar leido.
+
+**12.2 Pago individual → Alba recibe aviso.** Como Dani, marca un ticket como pagado. Como
+Alba: `Dani ha marcado como pagado el ticket Farmacia`, con el importe en el cuerpo y enlace
+al ticket.
+
+**12.3 Pago agrupado → Alba recibe aviso.** Como Dani, marca tres tickets a la vez. Como
+Alba: `Dani ha marcado como pagados 3 tickets por 40,00 €`, con los conceptos en el cuerpo.
+Al pulsarlo lleva al historico, porque un pago agrupado no tiene un unico ticket.
+
+**12.4 Nadie se avisa a si mismo.** Como Dani, sube tu un ticket. Dani **no** debe recibir
+aviso de su propia accion; Alba tampoco, porque el aviso de ticket va dirigido al rol `dani`.
+
+```sql
+select type, title, recipient_profile_id, expense_id, payment_id, read_at
+  from public.notifications order by created_at desc limit 10;
+```
+
+**12.5 El buzon es personal.** Como Alba, en consola:
+
+```js
+await supabase.from('notifications').select('*')
+```
+
+**Esperado:** solo salen las suyas. Compara el recuento con el total real:
+
+```sql
+select count(*) from public.notifications;  -- suele ser mayor que lo que ve Alba
+```
+
+**12.6 Nadie fabrica ni borra avisos.** Como Alba, en consola:
+
+```js
+// Inventar un aviso -> debe fallar
+await supabase.from('notifications').insert({ recipient_profile_id: MI_ID,
+  type: 'payment_registered', title: 'Falso', body: 'Falso' })
+
+// Borrar un aviso -> debe fallar
+await supabase.from('notifications').delete().eq('id', UN_ID)
+
+// Llamar al generador interno -> debe fallar
+await supabase.rpc('notify_role', { p_role: 'alba', p_type: 'payment_registered',
+  p_title: 'Falso', p_body: 'Falso', p_expense_id: null, p_payment_id: null })
+
+// Reescribir el texto de un aviso propio -> debe fallar
+await supabase.from('notifications').update({ title: 'Otra cosa' }).eq('id', MI_AVISO)
+```
+
+**Esperado:** las cuatro fallan. La ultima responde `De una notificacion solo se puede
+cambiar si esta leida`.
+
+**12.7 Marcar leido solo afecta a lo propio.** Como Alba, intenta marcar un aviso de Dani:
+
+```js
+await supabase.rpc('mark_notification_read', { p_notification_id: AVISO_DE_DANI })
+```
+
+**Esperado:** la llamada no da error (no encuentra fila que actualizar), pero el aviso de
+Dani **sigue sin leer**. Compruebalo en SQL:
+
+```sql
+select id, recipient_profile_id, read_at from public.notifications where id = 'AVISO_DE_DANI';
+```
+
+**12.8 Suscripciones push ajenas.** La tabla esta vacia (el push no esta operativo), pero las
+politicas deben cerrar igual. Como Alba, en consola:
+
+```js
+await supabase.from('push_subscriptions').select('*')            // solo las suyas: hoy, ninguna
+await supabase.from('push_subscriptions').insert({ profile_id: ID_DE_DANI,
+  endpoint: 'https://ejemplo/x', p256dh: 'x', auth: 'y' })       // debe fallar
+await supabase.from('push_subscriptions').delete().eq('id', UN_ID) // debe fallar
+```
+
+**Esperado:** la primera devuelve vacio; las otras dos fallan.
+
 ### Cuando termines
 
 Borra los tickets de prueba **anulandolos** (no hay otra via, y es intencionado), o vacia
@@ -338,7 +440,8 @@ las tablas desde el SQL Editor antes de empezar a usar la aplicacion de verdad:
 
 ```sql
 -- Solo para dejar limpio tras las pruebas, nunca en uso normal.
-truncate public.payment_expenses, public.payments, public.expense_photos, public.expenses;
+truncate public.notifications, public.payment_expenses, public.payments,
+         public.expense_photos, public.expenses;
 ```
 
 Los ficheros de prueba del bucket hay que borrarlos a mano desde **Storage → tickets**, ya
@@ -352,6 +455,68 @@ exportar de vez en cuando:
 ```bash
 supabase db dump --db-url "postgresql://..." -f copia-gastos-alba.sql
 ```
+
+## Push del navegador — PENDIENTE, no operativo
+
+**Estado actual: no llega ningun push, y no se ha probado ningun envio.** Lo unico que existe
+es la infraestructura de recepcion:
+
+- la tabla `push_subscriptions` con sus politicas RLS (creada en `0001` y `0002`);
+- los manejadores `push` y `notificationclick` en `public/service-worker.js`.
+
+Los avisos dentro de la aplicacion **no dependen de esto** y funcionan sin ello.
+
+### Lo que falta, en orden
+
+**1. Generar el par de claves VAPID.**
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+La **publica** puede ir al frontend (es publica por definicion); la **privada** es de
+servidor y no entra jamas en el repositorio ni en una variable `VITE_`.
+
+| Variable | Donde vive |
+|---|---|
+| `VITE_VAPID_PUBLIC_KEY` | Frontend (Vercel, entorno del cliente) |
+| `VAPID_PRIVATE_KEY` | Solo servidor (Supabase Edge Function secrets) |
+| `VAPID_SUBJECT` | Solo servidor: `mailto:` de contacto que exige el estandar |
+
+**2. Alta de la suscripcion desde el cliente.** Falta escribir: pedir permiso con
+`Notification.requestPermission()`, suscribirse con
+`registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` y
+guardar `endpoint`, `p256dh` y `auth` en `push_subscriptions`. La tabla y las politicas ya
+lo admiten.
+
+**3. Funcion servidor que envie.** Una Edge Function de Supabase que lea las suscripciones
+activas del destinatario, firme con la clave privada VAPID y haga el envio (con `web-push` o
+equivalente). Debe marcar `disabled_at` cuando el endpoint responda 404 o 410: una
+suscripcion caducada no se borra, se desactiva.
+
+**4. Disparador.** Un webhook de base de datos sobre `insert` en `notifications` que llame a
+esa funcion. De este modo el push seria un canal adicional del aviso que ya existe, no un
+camino paralelo que pueda desincronizarse.
+
+### Checklist de permisos, para cuando se implemente
+
+- **Android / Chrome:** funciona con la PWA instalada o desde el navegador. Requiere HTTPS.
+- **iOS / Safari:** requiere iOS 16.4 o superior **y** que la aplicacion este anadida a la
+  pantalla de inicio. Desde Safari, sin instalar, no hay push. Es la limitacion mas
+  importante a tener en cuenta, porque afecta al caso real de uso.
+- El permiso lo debe pedir un gesto de la persona (un boton), nunca al cargar la pagina: los
+  navegadores penalizan lo segundo y algunos lo bloquean.
+- Si alguien deniega el permiso, no se puede volver a preguntar desde la aplicacion: hay que
+  cambiarlo en los ajustes del navegador. Conviene que la interfaz lo diga.
+- Comprobar que el service worker esta registrado (`navigator.serviceWorker.getRegistration()`)
+  antes de intentar suscribir.
+
+### Como se comprobaria que funciona de verdad
+
+No basta con que la suscripcion se guarde. Habria que verificar, con la aplicacion **cerrada**
+en el movil: que Alba sube un ticket y al movil de Dani le llega la notificacion del sistema;
+que al tocarla se abre el ticket correcto; y que una suscripcion revocada queda con
+`disabled_at`. Hasta que eso se haya hecho al menos una vez, el push no esta hecho.
 
 ## Operaciones habituales
 

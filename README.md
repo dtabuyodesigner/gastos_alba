@@ -17,6 +17,14 @@ despliegue con La Libreta de Marcos. El contexto de producto vive en
   el razonamiento esta en `docs/DECISIONES.md`.
 - Dani ve los tickets, su parte exacta y la marca como pagada, de una en una o en grupo.
 - Todo queda en un historico consultable. Nada se borra: los tickets se anulan.
+- Cada quien recibe un aviso **dentro de la aplicacion** de lo que hace la otra persona:
+  Dani cuando Alba sube un ticket, Alba cuando Dani marca un pago. Con indicador de no
+  leidos en la cabecera.
+
+Los avisos **no salen de la aplicacion**: no hay email, ni WhatsApp, ni Telegram, y es
+deliberado (ver `docs/DECISIONES.md`). El push del navegador esta preparado pero **no
+operativo**: falta configurarlo, y el apartado "Push" de `docs/supabase/BOOTSTRAP.md` dice
+exactamente que.
 
 ## Stack
 
@@ -89,6 +97,7 @@ src/
   features/
     auth/         Sesion, perfil, login y puerta de acceso
     expenses/     Alta, listado, detalle y edicion de tickets
+    notifications/ Buzon de avisos dentro de la app
     payments/     Registro de pagos (individuales y agrupados)
     photos/       Subida, compresion y URLs firmadas
   components/     Piezas de interfaz compartidas

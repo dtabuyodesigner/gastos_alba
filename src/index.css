@@ -886,3 +886,116 @@ textarea.input {
     animation: none;
   }
 }
+
+/* --- Notificaciones ------------------------------------------------------- */
+
+.bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  margin-right: -6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  flex: none;
+}
+
+.bell--active {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.bell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.bell__badge {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.notif-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notif {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* Un aviso sin leer se marca con una barra lateral, no solo con color: se
+   distingue igual de bien en escala de grises o con poca luz. */
+.notif--unread {
+  border-left: 3px solid var(--accent);
+}
+
+.notif__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notif__body--plain {
+  cursor: default;
+}
+
+.notif__body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.notif__title {
+  font-weight: 600;
+}
+
+.notif--unread .notif__title {
+  font-weight: 700;
+}
+
+.notif__text {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.notif__when {
+  font-size: 0.78rem;
+}
+
+.notif__action {
+  flex: none;
+  align-self: center;
+}

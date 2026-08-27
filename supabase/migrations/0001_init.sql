@@ -265,6 +265,205 @@ create table if not exists public.payment_expenses (
 
 create index if not exists payment_expenses_expense_idx on public.payment_expenses (expense_id);
 
+-- =============================================================================
+-- Notificaciones dentro de la aplicacion
+--
+-- Alcance deliberado (ver docs/DECISIONES.md): el aviso vive DENTRO de la app.
+-- Nada de email, WhatsApp ni Telegram. El push del navegador queda preparado
+-- pero NO operativo: falta configurarlo (ver "Push" en BOOTSTRAP.md).
+--
+-- Las notificaciones no las crea nunca el cliente: se generan dentro de
+-- create_expense() y register_payment(), que ya son SECURITY DEFINER.
+-- =============================================================================
+
+do $$ begin
+  create type public.notification_type as enum ('ticket_created', 'payment_registered');
+exception when duplicate_object then null; end $$;
+
+-- Importe en formato espanol para el texto del aviso: 1235 -> "12,35 €".
+-- Sin separador de miles a proposito: en un ticket domestico no aporta, y
+-- to_char depende de la configuracion regional del servidor.
+create or replace function public.format_cents_es(p_cents integer)
+returns text
+language sql
+immutable
+set search_path = public, pg_temp
+as $$
+  select case when p_cents < 0 then '-' else '' end
+      || (abs(p_cents) / 100)::text
+      || ','
+      || lpad((abs(p_cents) % 100)::text, 2, '0')
+      || ' €';
+$$;
+
+create table if not exists public.notifications (
+  id                   uuid primary key default gen_random_uuid(),
+  recipient_profile_id uuid not null references public.profiles (id) on delete cascade,
+  -- Quien lo provoco. Nullable porque un aviso futuro podria no tener autor.
+  actor_profile_id     uuid references public.profiles (id),
+  type                 public.notification_type not null,
+  title                text not null check (char_length(btrim(title)) between 1 and 200),
+  body                 text not null check (char_length(btrim(body)) between 1 and 500),
+  expense_id           uuid references public.expenses (id),
+  payment_id           uuid references public.payments (id),
+  read_at              timestamptz,
+  created_at           timestamptz not null default now()
+);
+
+create index if not exists notifications_inbox_idx
+  on public.notifications (recipient_profile_id, created_at desc);
+create index if not exists notifications_unread_idx
+  on public.notifications (recipient_profile_id) where read_at is null;
+
+-- De una notificacion solo se puede marcar que se ha leido. Ni el texto, ni el
+-- destinatario, ni el enlace al gasto se pueden reescribir despues.
+create or replace function public.notifications_guard_update()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if (to_jsonb(new) - 'read_at') is distinct from (to_jsonb(old) - 'read_at') then
+    raise exception 'De una notificacion solo se puede cambiar si esta leida.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists notifications_guard on public.notifications;
+create trigger notifications_guard
+  before update on public.notifications
+  for each row execute function public.notifications_guard_update();
+
+-- -----------------------------------------------------------------------------
+-- push_subscriptions — PREPARADO, NO OPERATIVO
+--
+-- La tabla existe para que el dia que se configure el push del navegador no
+-- haya que migrar datos. Hoy NADA escribe aqui: faltan las claves VAPID, el
+-- alta de la suscripcion desde el cliente y la funcion servidor que envie.
+-- Ver docs/DECISIONES.md y el apartado "Push" de docs/supabase/BOOTSTRAP.md.
+-- -----------------------------------------------------------------------------
+create table if not exists public.push_subscriptions (
+  id          uuid primary key default gen_random_uuid(),
+  profile_id  uuid not null references public.profiles (id) on delete cascade,
+  endpoint    text not null unique check (char_length(endpoint) between 1 and 1000),
+  p256dh      text not null,
+  auth        text not null,
+  user_agent  text check (user_agent is null or char_length(user_agent) <= 400),
+  created_at  timestamptz not null default now(),
+  -- Baja logica, coherente con el resto del proyecto: no se borra, se desactiva.
+  disabled_at timestamptz
+);
+
+create index if not exists push_subscriptions_profile_idx
+  on public.push_subscriptions (profile_id) where disabled_at is null;
+
+create or replace function public.push_subscriptions_guard_update()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if old.profile_id is distinct from new.profile_id
+     or old.endpoint is distinct from new.endpoint
+     or old.created_at is distinct from new.created_at then
+    raise exception 'De una suscripcion solo se puede cambiar su estado.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists push_subscriptions_guard on public.push_subscriptions;
+create trigger push_subscriptions_guard
+  before update on public.push_subscriptions
+  for each row execute function public.push_subscriptions_guard_update();
+
+-- -----------------------------------------------------------------------------
+-- notify_role — uso interno
+--
+-- No se concede EXECUTE a nadie: solo la llaman create_expense() y
+-- register_payment(), que corren como su propietario. Asi el cliente no puede
+-- fabricar avisos falsos.
+-- -----------------------------------------------------------------------------
+create or replace function public.notify_role(
+  p_role       public.user_role,
+  p_type       public.notification_type,
+  p_title      text,
+  p_body       text,
+  p_expense_id uuid,
+  p_payment_id uuid
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_count integer;
+begin
+  insert into public.notifications (
+    recipient_profile_id, actor_profile_id, type, title, body, expense_id, payment_id
+  )
+  select p.id, auth.uid(), p_type,
+         left(btrim(p_title), 200),
+         left(btrim(p_body), 500),
+         p_expense_id, p_payment_id
+    from public.profiles p
+   where p.role = p_role
+     and p.is_active
+     -- Nadie se avisa a si mismo de lo que acaba de hacer.
+     and p.id is distinct from auth.uid();
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- Nombre visible de quien actua, para el texto del aviso.
+create or replace function public.current_display_name()
+returns text
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select coalesce(
+    (select p.display_name from public.profiles p where p.id = auth.uid() and p.is_active),
+    'Alguien'
+  );
+$$;
+
+create or replace function public.mark_notification_read(p_notification_id uuid)
+returns void
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  -- SECURITY INVOKER: la politica RLS ya limita a las propias notificaciones.
+  update public.notifications
+     set read_at = coalesce(read_at, now())
+   where id = p_notification_id
+     and recipient_profile_id = auth.uid();
+end;
+$$;
+
+create or replace function public.mark_all_notifications_read()
+returns integer
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  v_count integer;
+begin
+  update public.notifications
+     set read_at = now()
+   where recipient_profile_id = auth.uid()
+     and read_at is null;
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
 -- -----------------------------------------------------------------------------
 -- create_expense — alta de gasto y foto en UNA transaccion
 --
@@ -377,6 +576,18 @@ begin
     nullif(btrim(coalesce(p_mime_type, '')), ''), p_size_bytes, auth.uid()
   );
 
+  -- Aviso dentro de la app para quien paga. Va en la misma transaccion: si el
+  -- alta se deshace, el aviso no queda colgado.
+  perform public.notify_role(
+    'dani',
+    'ticket_created',
+    public.current_display_name() || ' ha subido un ticket de '
+      || public.format_cents_es(p_total_amount_cents),
+    btrim(p_concept),
+    v_id,
+    null
+  );
+
   return v_id;
 end;
 $$;
@@ -400,6 +611,7 @@ declare
   v_payment_id uuid;
   v_total      integer;
   v_count      integer;
+  v_concept    text;
 begin
   if not public.can_register_payment() then
     raise exception 'Solo Dani o un administrador pueden registrar pagos.' using errcode = '42501';
@@ -429,31 +641,57 @@ begin
   end if;
   -- Un lote que suma cero (tickets con 0% para Dani) se cierra sin registrar pago:
   -- no hay dinero que mover, y crear un pago de 0,00 EUR ensuciaria el historico.
-  if v_total = 0 then
-    perform set_config('app.allow_status_change', 'on', true);
-    update public.expenses set status = 'pagado' where id = any (v_ids);
-    perform set_config('app.allow_status_change', 'off', true);
-    return null;
+  if v_total > 0 then
+    insert into public.payments (paid_by, paid_at, amount_cents, method, notes)
+    values (
+      auth.uid(),
+      coalesce(p_paid_at, now()),
+      v_total,
+      nullif(btrim(coalesce(p_method, '')), ''),
+      nullif(btrim(coalesce(p_notes, '')), '')
+    )
+    returning id into v_payment_id;
+
+    insert into public.payment_expenses (payment_id, expense_id, amount_applied_cents)
+    select v_payment_id, e.id, e.dani_share_cents
+    from public.expenses e
+    where e.id = any (v_ids);
   end if;
-
-  insert into public.payments (paid_by, paid_at, amount_cents, method, notes)
-  values (
-    auth.uid(),
-    coalesce(p_paid_at, now()),
-    v_total,
-    nullif(btrim(coalesce(p_method, '')), ''),
-    nullif(btrim(coalesce(p_notes, '')), '')
-  )
-  returning id into v_payment_id;
-
-  insert into public.payment_expenses (payment_id, expense_id, amount_applied_cents)
-  select v_payment_id, e.id, e.dani_share_cents
-  from public.expenses e
-  where e.id = any (v_ids);
 
   perform set_config('app.allow_status_change', 'on', true);
   update public.expenses set status = 'pagado' where id = any (v_ids);
   perform set_config('app.allow_status_change', 'off', true);
+
+  -- Aviso dentro de la app para quien subio los tickets. El texto distingue el
+  -- pago suelto del agrupado, porque en la practica se leen muy distinto.
+  if v_count = 1 then
+    select e.concept into v_concept from public.expenses e where e.id = v_ids[1];
+    perform public.notify_role(
+      'alba',
+      'payment_registered',
+      public.current_display_name() || ' ha marcado como pagado el ticket ' || v_concept,
+      public.format_cents_es(v_total),
+      v_ids[1],
+      v_payment_id
+    );
+  else
+    -- En un pago agrupado el enlace va al pago, no a un ticket concreto, pero el
+    -- cuerpo lista los conceptos: es lo que Alba necesita para reconocerlos.
+    select string_agg(e.concept, ', ' order by e.expense_date desc)
+      into v_concept
+      from public.expenses e
+     where e.id = any (v_ids);
+
+    perform public.notify_role(
+      'alba',
+      'payment_registered',
+      public.current_display_name() || ' ha marcado como pagados ' || v_count
+        || ' tickets por ' || public.format_cents_es(v_total),
+      coalesce(v_concept, v_count || ' tickets'),
+      null,
+      v_payment_id
+    );
+  end if;
 
   return v_payment_id;
 end;

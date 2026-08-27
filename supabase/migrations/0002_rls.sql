@@ -11,15 +11,19 @@ alter table public.expenses         enable row level security;
 alter table public.expense_photos   enable row level security;
 alter table public.payments         enable row level security;
 alter table public.payment_expenses enable row level security;
+alter table public.notifications     enable row level security;
+alter table public.push_subscriptions enable row level security;
 
 -- Defensa en profundidad: aunque no haya politica DELETE, se retira el permiso.
 revoke delete on public.profiles, public.expenses, public.expense_photos,
-                 public.payments, public.payment_expenses
+                 public.payments, public.payment_expenses,
+                 public.notifications, public.push_subscriptions
   from anon, authenticated;
 
 -- El rol anonimo no tiene nada que hacer aqui.
 revoke all on public.profiles, public.expenses, public.expense_photos,
-               public.payments, public.payment_expenses
+               public.payments, public.payment_expenses,
+               public.notifications, public.push_subscriptions
   from anon;
 
 -- -----------------------------------------------------------------------------
@@ -164,8 +168,75 @@ revoke insert, update on public.payments, public.payment_expenses from authentic
 revoke insert on public.expenses, public.expense_photos from authenticated;
 
 -- -----------------------------------------------------------------------------
+-- notifications
+--
+-- Buzon estrictamente personal: cada quien ve SOLO lo suyo. A diferencia de los
+-- gastos, que son del nucleo familiar, un aviso va dirigido a una persona.
+-- -----------------------------------------------------------------------------
+drop policy if exists notifications_select_own on public.notifications;
+create policy notifications_select_own on public.notifications
+  for select to authenticated
+  using (recipient_profile_id = auth.uid() and public.is_active_member());
+
+drop policy if exists notifications_update_own on public.notifications;
+create policy notifications_update_own on public.notifications
+  for update to authenticated
+  using (recipient_profile_id = auth.uid() and public.is_active_member())
+  with check (recipient_profile_id = auth.uid());
+
+-- Sin politica INSERT: los avisos los generan create_expense() y
+-- register_payment(). Si el cliente pudiera insertar, podria fabricar un aviso
+-- falso de "pago registrado".
+revoke insert on public.notifications from authenticated;
+
+-- Sin politica DELETE: un aviso se marca leido, no se borra.
+
+-- -----------------------------------------------------------------------------
+-- push_subscriptions — cada quien gestiona solo las suyas
+--
+-- La tabla esta PREPARADA pero no operativa (ver 0001_init.sql). Las politicas
+-- se dejan puestas para que el dia que se configure el push no haya un hueco de
+-- seguridad abierto por prisa.
+-- -----------------------------------------------------------------------------
+drop policy if exists push_subscriptions_select_own on public.push_subscriptions;
+create policy push_subscriptions_select_own on public.push_subscriptions
+  for select to authenticated
+  using (profile_id = auth.uid() and public.is_active_member());
+
+drop policy if exists push_subscriptions_insert_own on public.push_subscriptions;
+create policy push_subscriptions_insert_own on public.push_subscriptions
+  for insert to authenticated
+  with check (profile_id = auth.uid() and public.is_active_member());
+
+drop policy if exists push_subscriptions_update_own on public.push_subscriptions;
+create policy push_subscriptions_update_own on public.push_subscriptions
+  for update to authenticated
+  using (profile_id = auth.uid() and public.is_active_member())
+  with check (profile_id = auth.uid());
+
+-- Sin politica DELETE: darse de baja es poner `disabled_at`, no borrar la fila.
+
+-- -----------------------------------------------------------------------------
 -- Permisos de ejecucion de las funciones
 -- -----------------------------------------------------------------------------
+revoke all on function public.mark_notification_read(uuid) from public, anon;
+grant execute on function public.mark_notification_read(uuid) to authenticated;
+
+revoke all on function public.mark_all_notifications_read() from public, anon;
+grant execute on function public.mark_all_notifications_read() to authenticated;
+
+revoke all on function public.format_cents_es(integer) from public, anon;
+grant execute on function public.format_cents_es(integer) to authenticated;
+
+revoke all on function public.current_display_name() from public, anon;
+grant execute on function public.current_display_name() to authenticated;
+
+-- notify_role NO se concede a nadie: solo la llaman create_expense() y
+-- register_payment(), que corren como su propietario. Si el cliente pudiera
+-- ejecutarla, podria fabricar avisos falsos a nombre de otra persona.
+revoke all on function public.notify_role(public.user_role, public.notification_type, text, text, uuid, uuid)
+  from public, anon, authenticated;
+
 revoke all on function public.create_expense(uuid, text, date, integer, numeric, text, text, text, text, bigint) from public, anon;
 grant execute on function public.create_expense(uuid, text, date, integer, numeric, text, text, text, text, bigint) to authenticated;
 

@@ -3,6 +3,8 @@ import { AuthProvider } from './features/auth/AuthProvider'
 import { RequireAuth } from './features/auth/RequireAuth'
 import { LoginPage } from './features/auth/LoginPage'
 import { AppLayout } from './components/AppLayout'
+import { NotificationsProvider } from './features/notifications/NotificationsProvider'
+import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { ConfigErrorScreen } from './components/ConfigErrorScreen'
 import { HomePage } from './pages/HomePage'
 import { HistoryPage } from './pages/HistoryPage'
@@ -24,7 +26,9 @@ export function App() {
           <Route
             element={
               <RequireAuth>
-                <AppLayout />
+                <NotificationsProvider>
+                  <AppLayout />
+                </NotificationsProvider>
               </RequireAuth>
             }
           >
@@ -33,6 +37,7 @@ export function App() {
             <Route path="/gastos/nuevo" element={<NewExpensePage />} />
             <Route path="/gastos/:id" element={<ExpenseDetailPage />} />
             <Route path="/historico" element={<HistoryPage />} />
+            <Route path="/notificaciones" element={<NotificationsPage />} />
             <Route path="/inicio" element={<Navigate to="/" replace />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />

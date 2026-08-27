@@ -3,6 +3,7 @@
 export type UserRole = 'alba' | 'dani' | 'admin'
 export type ExpenseStatus = 'pendiente' | 'pagado' | 'anulado'
 export type SplitType = 'mitad' | 'porcentaje'
+export type NotificationType = 'ticket_created' | 'payment_registered'
 
 export interface Profile {
   id: string
@@ -51,6 +52,19 @@ export interface Payment {
   amount_cents: number
   method: string | null
   notes: string | null
+  created_at: string
+}
+
+export interface AppNotification {
+  id: string
+  recipient_profile_id: string
+  actor_profile_id: string | null
+  type: NotificationType
+  title: string
+  body: string
+  expense_id: string | null
+  payment_id: string | null
+  read_at: string | null
   created_at: string
 }
 

@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../features/auth/useAuth'
 import { ROLE_LABELS } from '../lib/types'
+import { NotificationBell } from '../features/notifications/NotificationBell'
 
 /** Marco de la app: cabecera compacta y barra inferior con el pulgar en mente. */
 export function AppLayout() {
@@ -20,6 +21,7 @@ export function AppLayout() {
           <span className="brand__name">Gastos Alba</span>
         </div>
         <div className="app__user">
+          <NotificationBell />
           {profile ? (
             <span className="app__who">
               {profile.display_name}

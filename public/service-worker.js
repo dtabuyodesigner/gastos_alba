@@ -65,3 +65,57 @@ self.addEventListener('fetch', (event) => {
     }),
   )
 })
+
+/*
+ * Push del navegador — PREPARADO, NO OPERATIVO.
+ *
+ * Estos dos manejadores son lo unico que hace falta en el cliente para RECIBIR
+ * un push. Estan escritos y son correctos, pero hoy no llega ninguno: falta
+ * generar las claves VAPID, dar de alta la suscripcion desde la aplicacion y
+ * escribir la funcion servidor que envie. Ver el apartado "Push" de
+ * docs/supabase/BOOTSTRAP.md.
+ *
+ * Mientras tanto, el aviso vive dentro de la aplicacion (tabla `notifications`)
+ * y no depende de esto para nada.
+ *
+ * Nota de privacidad: aqui no se cachea nada. El payload de un push puede
+ * contener el concepto de un ticket y no debe quedar en disco.
+ */
+
+self.addEventListener('push', (event) => {
+  let payload = {}
+  try {
+    payload = event.data ? event.data.json() : {}
+  } catch {
+    payload = { title: 'Gastos Alba', body: event.data ? event.data.text() : '' }
+  }
+
+  const title = payload.title || 'Gastos Alba'
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: payload.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: payload.tag || 'gastos-alba',
+      data: { url: payload.url || '/notificaciones' },
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = (event.notification.data && event.notification.data.url) || '/notificaciones'
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // Si la app ya esta abierta, se reutiliza esa ventana en vez de abrir otra.
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
+          client.navigate(target)
+          return client.focus()
+        }
+      }
+      return self.clients.openWindow(target)
+    }),
+  )
+})

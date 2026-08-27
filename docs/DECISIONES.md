@@ -272,13 +272,75 @@ las mismas variables. Todo el diseno cabe en un fichero legible de una sentada.
 
 ---
 
+## 13. Los avisos viven dentro de la aplicacion. Nada de email
+
+**Decision.** Cuando Alba sube un ticket, Dani recibe un aviso; cuando Dani marca un pago,
+lo recibe Alba. Ese aviso es una fila en la tabla `notifications`, visible en la propia
+aplicacion, con indicador de no leidos en la cabecera.
+
+**Fuera de alcance, y no por olvido:** email, WhatsApp y Telegram. Cada uno de esos canales
+significa un proveedor externo, credenciales que guardar, datos de contacto que almacenar y
+un sitio mas donde acaban apareciendo conceptos de tickets. Para dos personas que ya abren
+la aplicacion, no compensa.
+
+**Por que se generan en el servidor.** Los avisos los crea `notify_role()`, llamada desde
+`create_expense()` y `register_payment()`, dentro de la misma transaccion que el hecho que
+notifican. Asi no puede existir un aviso de un pago que no ocurrio, ni un pago del que nadie
+se entera. El cliente no tiene `INSERT` sobre `notifications`, y `notify_role()` no tiene
+`EXECUTE` concedido a nadie: si lo tuviera, cualquiera podria fabricar un aviso falso a
+nombre de otra persona.
+
+**Detalles decididos.**
+
+- Se avisa a **todos** los perfiles activos con el rol destinatario, no a uno concreto. Con
+  dos cuentas da igual, pero definirlo evita que el dia que haya una tercera el aviso se
+  pierda en silencio.
+- **Nadie se avisa a si mismo.** Si Dani corrige y sube el un ticket, no recibe un aviso de
+  su propia accion.
+- Un aviso **se marca leido, no se borra**: sin politica `DELETE`, igual que los gastos.
+- De una fila de `notifications` solo puede cambiar `read_at`. El texto y el enlace quedan
+  congelados: son el registro de lo que se dijo en su momento.
+- El buzon es **estrictamente personal**. Es la unica tabla del proyecto que no comparte el
+  nucleo familiar: los gastos son de los dos, pero un aviso va dirigido a una persona.
+
+**Sondeo, no tiempo real.** El contador de no leidos se refresca cada minuto y al volver a
+la pestana. Supabase Realtime funcionaria, pero es una conexion permanente y mas
+configuracion para ganar un minuto en un aviso domestico.
+
+---
+
+## 14. El push del navegador queda preparado, no operativo
+
+**Decision.** Existen la tabla `push_subscriptions` con sus politicas y los manejadores
+`push` y `notificationclick` en el service worker. **No existe** ni el alta de la suscripcion
+desde el cliente ni nada que envie un push. Hoy no llega ninguno, y la aplicacion no depende
+de ello: el aviso in-app funciona por su cuenta.
+
+**Por que no esta terminado.** Un push real necesita cuatro piezas, y tres de ellas no se
+pueden dejar hechas ni verificadas sin credenciales del proyecto: un par de claves VAPID, el
+alta de la suscripcion en el navegador, una funcion servidor que firme y envie, y un
+disparador desde la base de datos. Escribir ese codigo sin poder ejecutarlo una sola vez
+seria dejar algo que parece hecho y no lo esta, que es peor que dejarlo pendiente.
+
+**Lo que falta, exactamente,** esta en el apartado "Push" de `docs/supabase/BOOTSTRAP.md`. La
+parte que si esta escrita —el service worker— es correcta y funcionara el dia que llegue un
+push, pero **no se ha podido probar** porque no hay nada que envie.
+
+**Sin secretos en el cliente.** La clave privada VAPID es de servidor. En el frontend solo
+entraria la clave publica, que es publica por definicion. La `service_role` no aparece por
+ningun lado, ni aparecera.
+
+---
+
 ## Anotado para mas adelante (no construido)
 
 - OCR del ticket para prerrellenar importe y fecha, siempre corregible a mano.
 - Invitacion de una segunda persona pagadora.
 - Repartos por importe fijo, ademas de por porcentaje.
 - Varios hijos o varios nucleos (`household_id`, ver decision 3).
-- Avisos de tickets pendientes acumulados.
+- Push real del navegador: claves VAPID, alta de suscripcion y funcion de envio (decision 14).
+- Avisos de tickets pendientes acumulados, y resumen mensual.
+- Email, WhatsApp y Telegram como canales de aviso: descartados, no pendientes (decision 13).
 - Limpieza programada de ficheros huerfanos en el bucket (ver decision 9). Hoy es una tarea
   manual desde el panel de Supabase, no un flujo de la aplicacion.
 - Excepcion "gasto sin justificante", para un ticket perdido o un pago sin comprobante (ver
