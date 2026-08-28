@@ -26,6 +26,8 @@ despliegue con La Libreta de Marcos. El contexto de producto vive en
 - Cada quien recibe un aviso **dentro de la aplicacion** de lo que hace la otra persona:
   Dani cuando Alba sube un ticket, Alba cuando Dani marca un pago. Con indicador de no
   leidos en la cabecera.
+- Si alguien olvida la contrasena, puede pedir un enlace desde la pantalla de entrada y
+  guardar una nueva desde la propia app.
 
 Anotar el metodo es solo eso: **una etiqueta de registro**. La aplicacion no mueve dinero, no
 habla con Bizum ni con ningun banco, no hay pasarela de pago y no se guarda ningun dato

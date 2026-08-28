@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './features/auth/AuthProvider'
 import { RequireAuth } from './features/auth/RequireAuth'
 import { LoginPage } from './features/auth/LoginPage'
+import { ResetPasswordPage } from './features/auth/ResetPasswordPage'
 import { AppLayout } from './components/AppLayout'
 import { NotificationsProvider } from './features/notifications/NotificationsProvider'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
@@ -23,6 +24,7 @@ export function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/cambiar-contrasena" element={<ResetPasswordPage />} />
           <Route
             element={
               <RequireAuth>

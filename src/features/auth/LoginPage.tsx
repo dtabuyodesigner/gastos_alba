@@ -11,10 +11,12 @@ import { Spinner } from '../../components/Spinner'
  * interfaz para no invitar a ello.
  */
 export function LoginPage() {
-  const { status, signIn } = useAuth()
+  const { status, signIn, requestPasswordReset } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [resetMode, setResetMode] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -35,6 +37,23 @@ export function LoginPage() {
     event.preventDefault()
     if (submitting) return
     setError(null)
+    setNotice(null)
+
+    if (resetMode) {
+      if (!email.trim()) {
+        setError('Escribe tu email.')
+        return
+      }
+      setSubmitting(true)
+      const result = await requestPasswordReset(email)
+      setSubmitting(false)
+      if (!result.ok) {
+        setError(result.error ?? 'No se ha podido enviar el enlace.')
+        return
+      }
+      setNotice('Te hemos enviado un enlace para cambiar la contrasena.')
+      return
+    }
 
     if (!email.trim() || !password) {
       setError('Rellena email y contrasena.')
@@ -90,8 +109,27 @@ export function LoginPage() {
           </p>
         ) : null}
 
+        {notice ? (
+          <p className="alert alert--success" role="status">
+            {notice}
+          </p>
+        ) : null}
+
         <button className="btn btn--primary btn--block" type="submit" disabled={submitting}>
-          {submitting ? 'Entrando…' : 'Entrar'}
+          {submitting ? (resetMode ? 'Enviando…' : 'Entrando…') : resetMode ? 'Enviar enlace' : 'Entrar'}
+        </button>
+
+        <button
+          className="btn btn--ghost btn--block"
+          type="button"
+          disabled={submitting}
+          onClick={() => {
+            setResetMode((current) => !current)
+            setError(null)
+            setNotice(null)
+          }}
+        >
+          {resetMode ? 'Volver a entrar' : 'He olvidado mi contrasena'}
         </button>
       </form>
     </div>

@@ -19,6 +19,8 @@ export interface AuthContextValue {
   /** Mensaje del ultimo fallo al resolver el perfil, si lo hubo. */
   error: string | null
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>
+  requestPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>
+  updatePassword: (password: string) => Promise<{ ok: boolean; error?: string }>
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }

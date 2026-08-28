@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase, humanizeError } from '../../lib/supabase'
 import type { Profile } from '../../lib/types'
 import { AuthContext, type AuthStatus, type AuthContextValue } from './auth-context'
+import { buildPasswordRecoveryRedirect } from './password'
 
 /**
  * Resuelve la sesion de Supabase y el perfil asociado.
@@ -93,6 +94,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { ok: true }
   }, [])
 
+  const requestPasswordReset = useCallback<AuthContextValue['requestPasswordReset']>(async (email) => {
+    setError(null)
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: buildPasswordRecoveryRedirect(window.location.origin),
+    })
+    if (resetError) return { ok: false, error: humanizeError(resetError) }
+    return { ok: true }
+  }, [])
+
+  const updatePassword = useCallback<AuthContextValue['updatePassword']>(async (password) => {
+    setError(null)
+    const { error: updateError } = await supabase.auth.updateUser({ password })
+    if (updateError) return { ok: false, error: humanizeError(updateError) }
+    return { ok: true }
+  }, [])
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     if (!mounted.current) return
@@ -107,8 +124,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [loadProfile, session])
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, session, profile, error, signIn, signOut, refreshProfile }),
-    [status, session, profile, error, signIn, signOut, refreshProfile],
+    () => ({ status, session, profile, error, signIn, requestPasswordReset, updatePassword, signOut, refreshProfile }),
+    [status, session, profile, error, signIn, requestPasswordReset, updatePassword, signOut, refreshProfile],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
