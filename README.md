@@ -17,6 +17,9 @@ despliegue con La Libreta de Marcos. El contexto de producto vive en
   el razonamiento esta en `docs/DECISIONES.md`.
 - Dani ve los tickets, su parte exacta y la marca como pagada, de una en una o en grupo,
   anotando como pago: Bizum, transferencia, efectivo u otro.
+- Si marca un pago por error puede deshacerlo: los tickets vuelven a pendiente y el pago
+  queda en el historico como deshecho. No se borra nada, y no se devuelve dinero: se corrige
+  el estado registrado en la aplicacion.
 - Si la foto sale movida o es la equivocada, se puede sustituir mientras el ticket siga
   pendiente. La anterior no se borra: se conserva marcada como reemplazada.
 - Todo queda en un historico consultable. Nada se borra: los tickets se anulan.
@@ -82,10 +85,11 @@ Antes de que la app funcione hay que preparar el proyecto Supabase. Los pasos es
 3. `0003_storage.sql` — bucket privado de fotos y sus politicas.
 4. `0004_update_after_mvp_reviews.sql` — parche idempotente **solo para bases que ya
    ejecutaron los tres anteriores en una version antigua**.
+5. `0005_void_payments.sql` — deshacer pagos. Necesario en cualquier base ya en marcha.
 
-En un proyecto nuevo ejecuta 1, 2 y 3 en ese orden desde el SQL Editor; el 4 no hace falta
-(y tampoco estorba). Si tu proyecto ya estaba creado desde antes de las ultimas revisiones,
-ejecuta **solo el 4**: reejecutar el 1 no aplicaria los cambios, porque crea las tablas con
+En un proyecto nuevo ejecuta 1, 2 y 3 en ese orden desde el SQL Editor; el 4 y el 5 no hacen
+falta (y tampoco estorban). Si tu proyecto ya estaba creado, ejecuta los parches que te
+falten: reejecutar el 1 no aplicaria los cambios, porque crea las tablas con
 `create table if not exists`. El detalle esta en `docs/supabase/BOOTSTRAP.md`.
 
 ## Comandos

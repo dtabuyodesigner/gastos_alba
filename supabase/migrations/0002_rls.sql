@@ -260,6 +260,9 @@ grant execute on function public.create_expense(uuid, text, date, integer, numer
 revoke all on function public.register_payment(uuid[], text, text, timestamptz) from public, anon;
 grant execute on function public.register_payment(uuid[], text, text, timestamptz) to authenticated;
 
+revoke all on function public.void_payment(uuid, text) from public, anon;
+grant execute on function public.void_payment(uuid, text) to authenticated;
+
 revoke all on function public.void_expense(uuid) from public, anon;
 grant execute on function public.void_expense(uuid) to authenticated;
 

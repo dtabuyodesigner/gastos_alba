@@ -34,6 +34,44 @@ export async function registerPayment(params: {
   return (data as string | null) ?? null
 }
 
+/**
+ * Deshace un pago registrado por error.
+ *
+ * No devuelve dinero ni habla con ningun banco: corrige el estado registrado en
+ * la aplicacion. El pago no se borra; se marca como deshecho y los tickets que
+ * cubria vuelven a pendiente. En el MVP se deshace el pago ENTERO: si cubria
+ * tres tickets, vuelven los tres.
+ */
+export async function voidPayment(paymentId: string, reason?: string | null): Promise<void> {
+  const { error } = await supabase.rpc('void_payment', {
+    p_payment_id: paymentId,
+    p_reason: reason?.trim() || null,
+  })
+  if (error) throw error
+}
+
+/**
+ * Pago vigente que cubre un ticket, si lo hay.
+ *
+ * Se traen los pagos enlazados y se descartan en cliente los deshechos: un
+ * ticket puede haber sido pagado, deshecho y vuelto a pagar, y solo interesa el
+ * que esta en pie.
+ */
+export async function getActivePaymentForExpense(expenseId: string): Promise<Payment | null> {
+  const { data, error } = await supabase
+    .from('payment_expenses')
+    .select('payments(*)')
+    .eq('expense_id', expenseId)
+  if (error) throw error
+
+  const rows = (data ?? []) as unknown as { payments: Payment | null }[]
+  const activos = rows
+    .map((row) => row.payments)
+    .filter((payment): payment is Payment => payment !== null && payment.voided_at === null)
+
+  return activos[0] ?? null
+}
+
 export async function listPayments(): Promise<Payment[]> {
   const { data, error } = await supabase
     .from('payments')

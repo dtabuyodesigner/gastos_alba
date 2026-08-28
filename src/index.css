@@ -1029,3 +1029,24 @@ textarea.input {
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
+/* Un pago deshecho sigue en el historico, pero se lee como lo que es. */
+.payment--voided {
+  opacity: 0.65;
+}
+
+.payment--voided strong {
+  text-decoration: line-through;
+}
+
+.paid-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 10px 14px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}

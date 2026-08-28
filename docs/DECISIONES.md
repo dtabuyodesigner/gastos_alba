@@ -418,6 +418,46 @@ impide. El historico de justificantes es de solo avance.
 
 ---
 
+## 18. Un pago se puede deshacer, y el pago deshecho se queda
+
+**Decision.** Dani (o un admin) puede deshacer un pago registrado por error. El pago **no se
+borra**: se marca con `voided_at`, `voided_by` y un motivo opcional, conserva importe, metodo,
+notas y sus filas de `payment_expenses`, y los tickets que cubria vuelven a `pendiente`.
+
+**Que NO es esto.** No se devuelve dinero. No hay banco, ni Bizum, ni pasarela. Se corrige el
+estado registrado en la aplicacion, igual que el metodo de pago es solo una etiqueta
+(decision 15). Si el dinero ya se movio de verdad, eso se arregla fuera.
+
+**Por que hacia falta.** Marcar pagado es un boton, y los botones se pulsan mal. Sin deshacer,
+la unica salida era editar la base de datos a mano. Ahora hay un camino en la aplicacion, con
+rastro.
+
+**Solo Dani y admin.** Alba no deshace pagos: es quien registra los gastos, no quien los paga.
+`canVoidPayment` en el cliente y `void_payment()` en el servidor aplican la misma regla, y la
+funcion comprueba el rol por dentro porque es `SECURITY DEFINER`.
+
+**Se deshace el pago ENTERO, tambien el agrupado.** Si un pago cubria tres tickets, al
+deshacerlo vuelven los tres. Deshacer solo uno obligaria a recalcular `amount_cents` del pago,
+que es justo el dato que no debe tocarse: es lo que se transfirio. La alternativa —dejar el
+importe y descuadrarlo respecto a los tickets que cubre— seria peor. Si algun dia hace falta,
+el camino limpio es deshacer el pago entero y volver a registrar los que si tocaban. La
+interfaz avisa del alcance antes de confirmar, porque es la parte que mas se malinterpreta.
+
+**Es idempotente.** Deshacer dos veces no falla ni avisa dos veces. Un doble clic no debe
+mostrar un error cuando la operacion ya salio bien. Se aparta a proposito de la alternativa
+—fallar con "ya estaba deshecho"— porque el caso real es el doble clic, no el intento
+malicioso.
+
+**Solo revierte los tickets que siguen pagados.** Un ticket puede pagarse, deshacerse y
+volverse a pagar con otro pago. Al deshacer el primero, el `update` filtra por
+`status = 'pagado'`, asi que no toca los que ya cubre un pago posterior.
+
+**Los totales no mienten.** El resumen mira el estado del gasto, no la tabla de pagos, asi que
+se corrige solo. En el historico los pagos deshechos siguen viendose, tachados y marcados, y
+quedan fuera del total.
+
+---
+
 ## Anotado para mas adelante (no construido)
 
 - OCR del ticket para prerrellenar importe y fecha, siempre corregible a mano.
@@ -436,3 +476,4 @@ impide. El historico de justificantes es de solo avance.
   decision 9 ter). Fuera de alcance a proposito en esta version.
 - Pago real dentro de la aplicacion, integracion con Bizum, con un banco o con una pasarela:
   descartado, no pendiente (decision 15). Aqui solo se registra lo que ocurre fuera.
+- Deshacer un unico ticket de un pago agrupado (decision 18). Hoy se deshace el pago entero.

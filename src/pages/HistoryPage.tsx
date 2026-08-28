@@ -3,6 +3,7 @@ import { useAsyncData } from '../lib/useAsyncData'
 import { listExpenses } from '../features/expenses/api'
 import { listPayments } from '../features/payments/api'
 import { paymentMethodLabel } from '../features/payments/methods'
+import { isPaymentActive, totalPaidCents } from '../features/payments/state'
 import { formatCents } from '../lib/money'
 import { formatMonthKey, formatTimestamp, monthKey } from '../lib/dates'
 import type { ExpenseWithPhotos, Payment } from '../lib/types'
@@ -69,13 +70,20 @@ export function HistoryPage() {
 
       {data && data.payments.length > 0 ? (
         <section className="month">
-          <h2 className="section__title">Pagos registrados</h2>
+          <h2 className="section__title">
+            Pagos registrados
+            <span className="muted"> · {formatCents(totalPaidCents(data.payments))}</span>
+          </h2>
           <ul className="payment-list">
             {data.payments.map((payment) => (
-              <li key={payment.id} className="payment">
+              <li key={payment.id} className={`payment ${isPaymentActive(payment) ? '' : 'payment--voided'}`}>
                 <span>{formatTimestamp(payment.paid_at)}</span>
                 <strong>{formatCents(payment.amount_cents)}</strong>
-                <span className="payment__method">{paymentMethodLabel(payment.method)}</span>
+                {isPaymentActive(payment) ? (
+                  <span className="payment__method">{paymentMethodLabel(payment.method)}</span>
+                ) : (
+                  <span className="badge badge--anulado">Deshecho</span>
+                )}
               </li>
             ))}
           </ul>

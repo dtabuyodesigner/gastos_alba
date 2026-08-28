@@ -30,19 +30,28 @@ En **SQL Editor**, ejecuta en este orden exacto el contenido de:
 2. `supabase/migrations/0002_rls.sql`
 3. `supabase/migrations/0003_storage.sql`
 
-Con eso ya tienes el esquema completo. **`0004` no hace falta**, aunque ejecutarlo no rompe
-nada: sobre una base recien creada no cambia absolutamente nada, porque todo lo que hace ya
-esta aplicado.
+Con eso ya tienes el esquema completo. **`0004` y `0005` no hacen falta**, aunque ejecutarlos
+no rompe nada: sobre una base recien creada no cambian absolutamente nada, porque todo lo que
+hacen ya esta aplicado.
 
 Si el paso 3 falla por permisos sobre `storage.objects`, crea el bucket `tickets` desde
 **Storage → New bucket** con la opcion *Public* DESACTIVADA y anade las mismas politicas
 desde **Storage → Policies**.
 
-### Caso B: ya ejecutaste 0001/0002/0003 antes de las ultimas revisiones
+### Caso B: tu proyecto ya existe
 
-**Ejecuta unicamente `supabase/migrations/0004_update_after_mvp_reviews.sql`.**
+Ejecuta **solo los parches que te falten**, en orden:
 
-No vuelvas a empezar y no reejecutes 0001. El motivo es concreto: 0001 crea las tablas con
+| Si tu base viene de… | Ejecuta |
+|---|---|
+| 0001/0002/0003 de antes de las revisiones del MVP | `0004` y despues `0005` |
+| ya aplicaste `0004` | solo `0005` |
+
+**Nunca vuelvas a ejecutar 0001.**
+
+#### `0004_update_after_mvp_reviews.sql`
+
+El motivo por el que hay parches y no se reejecuta 0001 es concreto: 0001 crea las tablas con
 `create table if not exists`, asi que sobre una base que ya las tiene **no anade las columnas
 nuevas ni cambia el tipo de `payments.method`**. Se ejecutaria entera sin dar un solo error y
 te dejaria la base a medias, que es lo peor de todo: parece que fue bien y no fue.
@@ -71,8 +80,24 @@ select id, paid_at, amount_cents, method, notes from public.payments order by pa
 -- update public.payments set method = 'bizum' where id = '<id>';
 ```
 
-Despues de ejecutar `0004`, pasa la validacion del apartado 6: es la unica forma de confirmar
-que la base quedo como debe.
+#### `0005_void_payments.sql`
+
+Anade "deshacer pago": si Dani marca un ticket como pagado por error, puede corregirlo. El
+pago no se borra, se marca como deshecho y los tickets vuelven a pendiente.
+
+Es igual de conservadora que la anterior: solo anade columnas vacias a `payments`, un indice,
+una guarda y la funcion `void_payment()`. **No modifica ningun pago existente**, y tambien es
+idempotente.
+
+Un detalle del que avisa el propio fichero: la primera linea es
+`alter type public.notification_type add value if not exists 'payment_voided'`. En Postgres 12
+y posteriores funciona dentro de una transaccion, que es lo que usa Supabase. Si tu editor se
+quejara con *"cannot be executed in a transaction block"*, ejecuta esa unica linea por
+separado y despues el resto del fichero.
+
+#### Y despues, siempre
+
+Pasa la validacion del apartado 6: es la unica forma de confirmar que la base quedo como debe.
 
 ## 3. Cerrar el registro publico
 
@@ -130,7 +155,7 @@ falta: el rol `dani` ya puede corregir y pagar cualquier ticket.
 > politicas RLS, el bucket y las funciones RPC estan escritas y revisadas, pero no se han
 > probado contra un Supabase real porque el proyecto todavia no existe. Esta seccion es la
 > lista de comprobacion que hay que completar **entera** antes de compartir la URL con
-> nadie. Hasta que las 13 casillas esten marcadas, la aplicacion no esta validada.
+> nadie. Hasta que las 14 casillas esten marcadas, la aplicacion no esta validada.
 >
 > El push del navegador no entra en esta lista porque **no esta implementado**: ver el
 > apartado "Push del navegador" mas abajo.
@@ -171,6 +196,7 @@ with esperado(nombre, seguridad, authenticated_puede) as (values
   ('mark_notification_read',      'DEFINER', true),
   ('mark_all_notifications_read', 'DEFINER', true),
   ('replace_expense_photo',        'DEFINER', true),
+  ('void_payment',                 'DEFINER', true),
   -- Ayudantes de autorizacion y de texto
   ('is_active_member',            'DEFINER', true),
   ('current_role_name',           'DEFINER', true),
@@ -188,6 +214,7 @@ with esperado(nombre, seguridad, authenticated_puede) as (values
   ('profiles_guard_update',       'INVOKER', true),
   ('notifications_guard_update',  'INVOKER', true),
   ('expense_photos_guard_update', 'INVOKER', true),
+  ('payments_guard_update',       'INVOKER', true),
   ('push_subscriptions_guard_update', 'INVOKER', true)
 )
 select e.nombre,
@@ -245,7 +272,8 @@ select 'funcion', p.proname
                          'expenses_guard_update','profiles_guard_update',
                          'notifications_guard_update','push_subscriptions_guard_update',
                          'replace_expense_photo','assert_ticket_photo',
-                         'expense_photos_guard_update')
+                         'expense_photos_guard_update','void_payment',
+                         'payments_guard_update')
  order by 1, 2;
 ```
 
@@ -706,6 +734,84 @@ await supabase.rpc('assert_ticket_photo', { p_expense_id: ID, p_storage_path: 'x
 ```
 
 **Esperado:** las tres fallan por permiso denegado.
+
+### 14. Deshacer un pago
+
+**14.1 Pago individual.** Como Dani, marca un ticket como pagado por Bizum. Vuelve a abrirlo:
+debe verse "Pagado por Bizum" y un boton **Deshacer pago**. Pulsalo, escribe un motivo y
+confirma.
+
+**Esperado:** el ticket vuelve a `pendiente` y reaparece el boton de marcarlo como pagado.
+
+```sql
+select status from public.expenses where id = '<id-del-ticket>';
+select id, amount_cents, method, voided_at, voided_by, void_reason from public.payments
+ order by paid_at desc limit 3;
+```
+
+**Esperado:** el gasto en `pendiente`; el pago **sigue existiendo**, con `voided_at`,
+`voided_by` y el motivo. `amount_cents` y `method` intactos.
+
+**14.2 Las relaciones tampoco se borran.**
+
+```sql
+select pe.payment_id, pe.expense_id, pe.amount_applied_cents
+  from public.payment_expenses pe
+ where pe.payment_id = '<id-del-pago-deshecho>';
+```
+
+**Esperado:** las filas siguen ahi. Deshacer no borra nada.
+
+**14.3 Pago agrupado: vuelven todos.** Como Dani, paga tres tickets juntos. Abre uno: debe
+avisar de que el pago cubre 3 tickets y de que al deshacerlo vuelven todos. Confirma.
+
+**Esperado:** los tres pasan a `pendiente`.
+
+```sql
+select e.concept, e.status
+  from public.expenses e
+  join public.payment_expenses pe on pe.expense_id = e.id
+ where pe.payment_id = '<id-del-pago>';
+```
+
+**Esperado:** los tres en `pendiente`.
+
+**14.4 Alba no puede deshacer.** En la sesion de Alba, el boton no aparece. Y por RPC:
+
+```js
+await supabase.rpc('void_payment', { p_payment_id: ID_PAGO })
+```
+
+**Esperado:** `Solo Dani o un administrador pueden deshacer pagos`, y el pago sigue vigente.
+
+**14.5 Deshacer dos veces es inocuo.** Como Dani, llama otra vez sobre el mismo pago:
+
+```js
+await supabase.rpc('void_payment', { p_payment_id: ID_YA_DESHECHO })
+```
+
+**Esperado:** **no da error** — la funcion es idempotente a proposito, para que un doble clic
+no muestre un fallo cuando la operacion ya salio bien. Comprueba que no ha pasado nada nuevo:
+`voided_at` conserva la fecha original y Alba **no** recibe un segundo aviso.
+
+**14.6 Alba recibe el aviso.** En la sesion de Alba, tras 14.1: `Dani ha deshecho el pago del
+ticket Farmacia`, con el importe y "vuelve a pendiente" en el cuerpo. En el agrupado:
+`Dani ha deshecho un pago de 3 tickets: 40,00 €`.
+
+**14.7 El cliente no puede tocar payments a mano.** Como Dani, en consola:
+
+```js
+await supabase.from('payments').update({ voided_at: new Date().toISOString() }).eq('id', ID)
+await supabase.from('payments').update({ amount_cents: 1 }).eq('id', ID)
+await supabase.from('payments').delete().eq('id', ID)
+await supabase.from('payment_expenses').delete().eq('payment_id', ID)
+```
+
+**Esperado:** las cuatro fallan por permiso denegado.
+
+**14.8 En el historico se ve, no desaparece.** Abre Historico: el pago deshecho debe seguir en
+la lista, atenuado, con el importe tachado y la etiqueta **Deshecho**, y **fuera** del total
+de la cabecera.
 
 ### Cuando termines
 

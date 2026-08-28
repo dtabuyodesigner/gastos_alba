@@ -2,14 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { useAsyncData } from '../../lib/useAsyncData'
-import { humanizeError } from '../../lib/supabase'
+import { humanizeError, supabase } from '../../lib/supabase'
 import { formatCents, parseAmountToCents, centsToInputValue } from '../../lib/money'
 import { formatIsoDate, formatTimestamp, todayIso } from '../../lib/dates'
+import type { Payment } from '../../lib/types'
 import { permissions } from '../../lib/types'
 import { getExpense, replaceExpensePhoto, updateExpense, voidExpense } from './api'
 import { currentPhotos } from './photos'
 import { PhotoReplacer } from './PhotoReplacer'
-import { registerPayment } from '../payments/api'
+import { getActivePaymentForExpense, registerPayment, voidPayment } from '../payments/api'
+import { VoidPaymentForm } from '../payments/VoidPaymentForm'
+import { paymentMethodLabel } from '../payments/methods'
 import { PaymentForm } from '../payments/PaymentForm'
 import type { PaymentMethod } from '../payments/methods'
 import { ExpenseFormFields, type ExpenseFormState } from './ExpenseFormFields'
@@ -30,9 +33,42 @@ export function ExpenseDetailPage() {
   const [busy, setBusy] = useState(false)
   const [payingOpen, setPayingOpen] = useState(false)
   const [photoOpen, setPhotoOpen] = useState(false)
+  const [undoOpen, setUndoOpen] = useState(false)
+  const [payment, setPayment] = useState<Payment | null>(null)
+  const [paymentTickets, setPaymentTickets] = useState(1)
 
   useEffect(() => {
     document.title = expense ? `${expense.concept} · Gastos Alba` : 'Ticket · Gastos Alba'
+  }, [expense])
+
+  // El pago solo hace falta cuando el ticket esta pagado: es lo unico que
+  // permite deshacerlo y saber cuantos tickets arrastra.
+  useEffect(() => {
+    let cancelled = false
+    if (!expense || expense.status !== 'pagado') {
+      setPayment(null)
+      return
+    }
+    getActivePaymentForExpense(expense.id)
+      .then(async (found) => {
+        if (cancelled) return
+        setPayment(found)
+        if (found) {
+          const { count } = await supabase
+            .from('payment_expenses')
+            .select('expense_id', { count: 'exact', head: true })
+            .eq('payment_id', found.id)
+          if (!cancelled) setPaymentTickets(count ?? 1)
+        }
+      })
+      .catch(() => {
+        // Si no se puede leer el pago, el ticket se sigue viendo igual; solo
+        // no se ofrece deshacerlo.
+        if (!cancelled) setPayment(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [expense])
 
   if (loading) {
@@ -58,6 +94,7 @@ export function ExpenseDetailPage() {
   const canVoid = permissions.canVoidExpense(profile.role, profile.id, expense)
   const canPay = permissions.canRegisterPayment(profile.role) && expense.status === 'pendiente'
   const canReplacePhoto = permissions.canReplacePhoto(profile.role, profile.id, expense)
+  const canUndoPayment = payment !== null && permissions.canVoidPayment(profile.role, payment)
   const photos = currentPhotos(expense.expense_photos)
 
   function startEditing() {
@@ -121,6 +158,21 @@ export function ExpenseDetailPage() {
     try {
       await replaceExpensePhoto(id, file)
       setPhotoOpen(false)
+      await reload()
+    } catch (err) {
+      setActionError(humanizeError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleUndoPayment(reason: string) {
+    if (busy || !payment) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      await voidPayment(payment.id, reason)
+      setUndoOpen(false)
       await reload()
     } catch (err) {
       setActionError(humanizeError(err))
@@ -215,7 +267,31 @@ export function ExpenseDetailPage() {
 
           {actionError ? <p className="alert alert--error">{actionError}</p> : null}
 
+          {expense.status === 'pagado' && payment ? (
+            <p className="paid-note">
+              Pagado {paymentMethodLabel(payment.method).toLowerCase() === 'efectivo' ? 'en' : 'por'}{' '}
+              {paymentMethodLabel(payment.method)} · {formatTimestamp(payment.paid_at)}
+              {paymentTickets > 1 ? <span className="muted"> · junto a otros {paymentTickets - 1}</span> : null}
+            </p>
+          ) : null}
+
           <div className="actions actions--stack">
+            {canUndoPayment && !undoOpen ? (
+              <button type="button" className="btn btn--secondary" onClick={() => setUndoOpen(true)}>
+                Deshacer pago
+              </button>
+            ) : null}
+
+            {canUndoPayment && undoOpen && payment ? (
+              <VoidPaymentForm
+                payment={payment}
+                ticketCount={paymentTickets}
+                busy={busy}
+                onCancel={() => setUndoOpen(false)}
+                onConfirm={(reason) => void handleUndoPayment(reason)}
+              />
+            ) : null}
+
             {canPay && !payingOpen ? (
               <button
                 className="btn btn--primary btn--block"

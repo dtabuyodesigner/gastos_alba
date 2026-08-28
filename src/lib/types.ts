@@ -7,7 +7,7 @@ export type { PaymentMethod }
 export type UserRole = 'alba' | 'dani' | 'admin'
 export type ExpenseStatus = 'pendiente' | 'pagado' | 'anulado'
 export type SplitType = 'mitad' | 'porcentaje'
-export type NotificationType = 'ticket_created' | 'payment_registered'
+export type NotificationType = 'ticket_created' | 'payment_registered' | 'payment_voided'
 
 export interface Profile {
   id: string
@@ -60,6 +60,10 @@ export interface Payment {
   method: PaymentMethod
   notes: string | null
   created_at: string
+  /** Puesto cuando el pago se ha deshecho. El pago no se borra nunca. */
+  voided_at: string | null
+  voided_by: string | null
+  void_reason: string | null
 }
 
 export interface AppNotification {
@@ -84,6 +88,15 @@ export interface ExpenseWithPhotos extends Expense {
 export const permissions = {
   /** Solo Dani y admin registran pagos. */
   canRegisterPayment: (role: UserRole): boolean => role === 'dani' || role === 'admin',
+
+  /**
+   * Deshacer un pago es corregir un error de registro, no devolver dinero.
+   * Lo hace quien paga, nunca Alba. Un pago ya deshecho no se vuelve a deshacer.
+   */
+  canVoidPayment: (role: UserRole, payment: Pick<Payment, 'voided_at'>): boolean => {
+    if (payment.voided_at !== null) return false
+    return role === 'dani' || role === 'admin'
+  },
   /** Alba edita sus propios gastos mientras sigan pendientes; Dani y admin, cualquiera no anulado. */
   canEditExpense: (role: UserRole, userId: string, expense: Expense): boolean => {
     if (expense.status === 'anulado') return false

@@ -3,6 +3,7 @@ import initSql from '../../supabase/migrations/0001_init.sql?raw'
 import rlsSql from '../../supabase/migrations/0002_rls.sql?raw'
 import storageSql from '../../supabase/migrations/0003_storage.sql?raw'
 import updateSql from '../../supabase/migrations/0004_update_after_mvp_reviews.sql?raw'
+import voidPaymentsSql from '../../supabase/migrations/0005_void_payments.sql?raw'
 import { PAYMENT_METHODS } from '../features/payments/methods'
 
 /**
@@ -281,17 +282,24 @@ describe('0004: puesta al dia de una base ya inicializada', () => {
 
   it('copia las funciones sin separarse del original', () => {
     // Esta es la guarda que hace viable tener las definiciones por duplicado:
-    // si alguien cambia una funcion en 0001 y se olvida de 0004, la base ya
+    // si alguien cambia una funcion en 0001 y se olvida del parche, la base ya
     // inicializada se quedaria con la version antigua sin que nadie lo notara.
     const original = [...functionNames(initSql), ...functionNames(rlsSql)]
-    const enParche = functionNames(updateSql)
-    expect([...enParche].sort()).toEqual([...original].sort())
+    const enParches = [...functionNames(updateSql), ...functionNames(voidPaymentsSql)]
 
-    for (const nombre of original) {
-      const fuente = initSql.includes(`create or replace function public.${nombre}(`) ? initSql : rlsSql
-      expect(functionBody(updateSql, nombre), `la copia de ${nombre} en 0004 ha divergido`).toBe(
-        functionBody(fuente, nombre),
-      )
+    // Entre 0004 y 0005 deben estar todas: quien va al dia ejecuta los dos.
+    expect([...new Set(enParches)].sort()).toEqual([...new Set(original)].sort())
+
+    for (const [fichero, sql] of [
+      ['0004', updateSql],
+      ['0005', voidPaymentsSql],
+    ] as const) {
+      for (const nombre of functionNames(sql)) {
+        const fuente = initSql.includes(`create or replace function public.${nombre}(`) ? initSql : rlsSql
+        expect(functionBody(sql, nombre), `la copia de ${nombre} en ${fichero} ha divergido`).toBe(
+          functionBody(fuente, nombre),
+        )
+      }
     }
   })
 
@@ -335,5 +343,84 @@ describe('0004: puesta al dia de una base ya inicializada', () => {
         `drop policy if exists ${m[1]}`,
       )
     }
+  })
+})
+
+describe('deshacer pagos', () => {
+  const body = functionBody(initSql, 'void_payment')
+
+  it('solo Dani o un admin, y comprobado en el servidor', () => {
+    expect(body).toMatch(/v_role not in \('dani', 'admin'\)/)
+    expect(body).toMatch(/security definer/)
+    expect(body).toMatch(/set search_path = public, pg_temp/)
+    expect(rlsSql).toMatch(/grant execute on function public\.void_payment\(uuid, text\) to authenticated/)
+    expect(rlsSql).toMatch(/revoke all on function public\.void_payment\(uuid, text\) from public, anon/)
+  })
+
+  it('no borra nada: marca el pago y devuelve los tickets a pendiente', () => {
+    expect(body).not.toMatch(/delete from/)
+    expect(body).toMatch(/set voided_at\s+= now\(\)/)
+    expect(body).toMatch(/set status = 'pendiente'/)
+    // Solo revierte los que siguen pagados: si el ticket ya se pago de nuevo
+    // con otro pago, no se le toca.
+    expect(body).toMatch(/and status = 'pagado'/)
+  })
+
+  it('usa el mismo candado de estado que register_payment', () => {
+    expect(body).toMatch(/set_config\('app\.allow_status_change', 'on', true\)/)
+    expect(body).toMatch(/set_config\('app\.allow_status_change', 'off', true\)/)
+  })
+
+  it('bloquea los tickets antes de tocarlos', () => {
+    const lock = body.indexOf('for update')
+    const update = body.indexOf("set status = 'pendiente'")
+    expect(lock).toBeGreaterThan(-1)
+    expect(lock).toBeLessThan(update)
+  })
+
+  it('es idempotente: deshacer dos veces no avisa dos veces', () => {
+    const early = body.indexOf('return; -- idempotente')
+    const notify = body.indexOf('notify_role')
+    expect(early).toBeGreaterThan(-1)
+    expect(early).toBeLessThan(notify)
+  })
+
+  it('avisa a Alba de que el ticket vuelve a pendiente', () => {
+    expect(body).toMatch(/'alba',\s*\n\s*'payment_voided'/)
+  })
+
+  it('de un pago solo puede marcarse que se ha deshecho, y una vez', () => {
+    const guard = functionBody(initSql, 'payments_guard_update')
+    expect(guard).toMatch(/to_jsonb\(new\) - 'voided_at' - 'voided_by' - 'void_reason'/)
+    expect(guard).toMatch(/old\.voided_at is not null/)
+  })
+
+  it('el cliente no puede tocar payments directamente', () => {
+    expect(rlsSql).toMatch(/revoke insert, update on public\.payments/)
+    expect(rlsSql).toMatch(/revoke delete on[\s\S]*?public\.payments/)
+  })
+})
+
+describe('0005: deshacer pagos sobre una base ya en marcha', () => {
+  const codigo = voidPaymentsSql
+    .split('\n')
+    .filter((linea) => !linea.trimStart().startsWith('--'))
+    .join('\n')
+
+  it('no contiene ninguna sentencia destructiva', () => {
+    expect(codigo).not.toMatch(/drop table/i)
+    expect(codigo).not.toMatch(/truncate/i)
+    expect(codigo).not.toMatch(/delete from/i)
+    expect(codigo).not.toMatch(/drop column/i)
+  })
+
+  it('anade lo que falta de forma reejecutable', () => {
+    expect(codigo).toMatch(/alter type public\.notification_type add value if not exists 'payment_voided'/)
+    expect(codigo).toMatch(/add column if not exists voided_at/)
+    expect(codigo).toMatch(/add column if not exists voided_by/)
+    expect(codigo).toMatch(/add column if not exists void_reason/)
+    expect(codigo).toMatch(/add constraint payments_voided_consistency/)
+    expect(codigo).toMatch(/create index if not exists payments_active_idx/)
+    expect(codigo).toMatch(/grant execute on function public\.void_payment/)
   })
 })

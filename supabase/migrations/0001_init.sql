@@ -416,10 +416,44 @@ create table if not exists public.payments (
   -- necesitan metodo.
   method       public.payment_method not null,
   notes        text check (notes is null or char_length(notes) <= 1000),
-  created_at   timestamptz not null default now()
+  created_at   timestamptz not null default now(),
+  -- Deshacer un pago no lo borra: se marca aqui y los tickets que cubria
+  -- vuelven a pendiente. El importe, el metodo, las notas y las relaciones se
+  -- conservan intactos, porque el pago ocurrio y forma parte del historico.
+  voided_at    timestamptz,
+  voided_by    uuid references public.profiles (id),
+  void_reason  text constraint payments_void_reason_length
+                 check (void_reason is null or char_length(void_reason) <= 500),
+  constraint payments_voided_consistency
+    check ((voided_at is null) = (voided_by is null))
 );
 
 create index if not exists payments_paid_at_idx on public.payments (paid_at desc);
+create index if not exists payments_active_idx on public.payments (paid_at desc) where voided_at is null;
+
+-- De un pago solo puede marcarse que se ha deshecho, y una sola vez. El importe,
+-- el metodo y la fecha son inmutables: reescribirlos falsearia el historico.
+create or replace function public.payments_guard_update()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if (to_jsonb(new) - 'voided_at' - 'voided_by' - 'void_reason')
+     is distinct from (to_jsonb(old) - 'voided_at' - 'voided_by' - 'void_reason') then
+    raise exception 'De un pago solo se puede marcar que ha sido deshecho.' using errcode = '42501';
+  end if;
+  if old.voided_at is not null then
+    raise exception 'Un pago ya deshecho no vuelve a cambiar.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists payments_guard on public.payments;
+create trigger payments_guard
+  before update on public.payments
+  for each row execute function public.payments_guard_update();
 
 create table if not exists public.payment_expenses (
   payment_id           uuid not null references public.payments (id) on delete cascade,
@@ -443,7 +477,7 @@ create index if not exists payment_expenses_expense_idx on public.payment_expens
 -- =============================================================================
 
 do $$ begin
-  create type public.notification_type as enum ('ticket_created', 'payment_registered');
+  create type public.notification_type as enum ('ticket_created', 'payment_registered', 'payment_voided');
 exception when duplicate_object then null; end $$;
 
 -- Importe en formato espanol para el texto del aviso: 1235 -> "12,35 €".
@@ -883,6 +917,102 @@ begin
   end if;
 
   return v_payment_id;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- void_payment — deshacer un pago registrado por error
+--
+-- No devuelve dinero ni habla con ningun banco: corrige el estado registrado en
+-- la aplicacion. El pago NO se borra: se marca con `voided_at` y `voided_by`,
+-- conserva importe, metodo, notas y sus filas de `payment_expenses`, y los
+-- tickets que cubria vuelven a `pendiente`.
+--
+-- En el MVP se deshace el pago ENTERO. Si cubria tres tickets, vuelven los tres.
+-- Deshacer solo uno de un pago agrupado obligaria a recalcular el importe del
+-- pago, que es precisamente el dato que no se debe tocar (ver DECISIONES.md).
+--
+-- Es idempotente: deshacer dos veces no falla ni avisa dos veces. Un doble clic
+-- no debe mostrar un error cuando la operacion ya salio bien.
+-- -----------------------------------------------------------------------------
+create or replace function public.void_payment(p_payment_id uuid, p_reason text default null)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_payment public.payments%rowtype;
+  v_role    public.user_role;
+  v_ids     uuid[];
+  v_count   integer;
+  v_concept text;
+begin
+  v_role := public.current_role_name();
+  if v_role is null then
+    raise exception 'Sin permiso.' using errcode = '42501';
+  end if;
+  if v_role not in ('dani', 'admin') then
+    raise exception 'Solo Dani o un administrador pueden deshacer pagos.' using errcode = '42501';
+  end if;
+
+  select * into v_payment from public.payments where id = p_payment_id for update;
+  if not found then
+    raise exception 'El pago no existe.' using errcode = '22023';
+  end if;
+  if v_payment.voided_at is not null then
+    return; -- idempotente
+  end if;
+
+  select array_agg(pe.expense_id) into v_ids
+    from public.payment_expenses pe
+   where pe.payment_id = p_payment_id;
+  v_ids := coalesce(v_ids, '{}'::uuid[]);
+
+  -- Bloqueo de los tickets para que no se paguen a la vez que se deshacen.
+  perform 1 from public.expenses where id = any (v_ids) for update;
+
+  update public.payments
+     set voided_at   = now(),
+         voided_by   = auth.uid(),
+         void_reason = nullif(btrim(coalesce(p_reason, '')), '')
+   where id = p_payment_id;
+
+  perform set_config('app.allow_status_change', 'on', true);
+  update public.expenses
+     set status = 'pendiente'
+   where id = any (v_ids)
+     and status = 'pagado';
+  perform set_config('app.allow_status_change', 'off', true);
+
+  v_count := cardinality(v_ids);
+
+  if v_count = 1 then
+    select e.concept into v_concept from public.expenses e where e.id = v_ids[1];
+    perform public.notify_role(
+      'alba',
+      'payment_voided',
+      public.current_display_name() || ' ha deshecho el pago del ticket ' || v_concept,
+      public.format_cents_es(v_payment.amount_cents) || ', vuelve a pendiente',
+      v_ids[1],
+      p_payment_id
+    );
+  else
+    select string_agg(e.concept, ', ' order by e.expense_date desc)
+      into v_concept
+      from public.expenses e
+     where e.id = any (v_ids);
+
+    perform public.notify_role(
+      'alba',
+      'payment_voided',
+      public.current_display_name() || ' ha deshecho un pago de ' || v_count
+        || ' tickets: ' || public.format_cents_es(v_payment.amount_cents),
+      coalesce(v_concept, v_count || ' tickets') || ', vuelven a pendiente',
+      null,
+      p_payment_id
+    );
+  end if;
 end;
 $$;
 

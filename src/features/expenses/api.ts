@@ -180,7 +180,13 @@ export interface ExpenseTotals {
   pendienteCount: number
 }
 
-/** Resumen para la pantalla de inicio. Se calcula en cliente sobre lo ya cargado. */
+/**
+ * Resumen para la pantalla de inicio. Se calcula en cliente sobre lo ya cargado.
+ *
+ * Se mira el estado del GASTO, no la tabla de pagos, y por eso deshacer un pago
+ * se refleja solo: `void_payment()` devuelve los tickets a `pendiente` y aqui
+ * pasan de contar como pagado a contar como pendiente sin tocar nada mas.
+ */
 export function summarize(expenses: ExpenseWithPhotos[]): ExpenseTotals {
   return expenses.reduce<ExpenseTotals>(
     (acc, expense) => {

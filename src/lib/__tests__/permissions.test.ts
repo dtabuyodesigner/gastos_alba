@@ -33,6 +33,24 @@ describe('canRegisterPayment', () => {
   })
 })
 
+describe('canVoidPayment', () => {
+  const vigente = { voided_at: null }
+  const deshecho = { voided_at: '2026-08-28T09:00:00Z' }
+
+  it('solo Dani y admin deshacen pagos', () => {
+    expect(permissions.canVoidPayment('dani', vigente)).toBe(true)
+    expect(permissions.canVoidPayment('admin', vigente)).toBe(true)
+    // Alba no deshace pagos: es quien cobra, no quien paga.
+    expect(permissions.canVoidPayment('alba', vigente)).toBe(false)
+  })
+
+  it('un pago ya deshecho no se vuelve a deshacer', () => {
+    for (const role of ['dani', 'admin', 'alba'] as const) {
+      expect(permissions.canVoidPayment(role, deshecho)).toBe(false)
+    }
+  })
+})
+
 describe('canEditExpense', () => {
   it('Alba edita sus tickets solo mientras siguen pendientes', () => {
     expect(permissions.canEditExpense('alba', ALBA, expenseWith('pendiente'))).toBe(true)
