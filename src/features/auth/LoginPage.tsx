@@ -90,18 +90,20 @@ export function LoginPage() {
           />
         </label>
 
-        <label className="field">
-          <span className="field__label">Contrasena</span>
-          <input
-            className="input"
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </label>
+        {!resetMode ? (
+          <label className="field">
+            <span className="field__label">Contrasena</span>
+            <input
+              className="input"
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </label>
+        ) : null}
 
         {error ? (
           <p className="alert alert--error" role="alert">
