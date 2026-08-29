@@ -735,6 +735,8 @@ textarea.input {
 
 .photo-picker__actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 8px;
 }
 
@@ -1047,6 +1049,18 @@ textarea.input {
   padding: 10px 14px;
   background: var(--ok-soft);
   color: var(--ok);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+
+.badge-setup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--surface);
   border-radius: var(--radius-sm);
   font-size: 0.9rem;
 }

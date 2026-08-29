@@ -458,6 +458,48 @@ quedan fuera del total.
 
 ---
 
+## 19. Camara y fototeca son dos botones, no uno
+
+En iOS, un `<input type="file">` con el atributo `capture` va DIRECTO a la camara. No es que
+la ofrezca primero: es que la fototeca deja de ser alcanzable. Los dos inputs de la aplicacion
+llevaban `capture="environment"`, asi que desde el iPhone solo se podia fotografiar el ticket
+en ese momento; una foto ya guardada no habia manera de subirla.
+
+**Dos inputs, dos botones.** Uno con `capture` para "Hacer foto" y otro sin el para "Elegir de
+Fotos". El segundo, en iOS, abre el menu propio del sistema (Fototeca / Hacer foto / Elegir
+archivo), asi que aunque el primero fallara la fototeca seguiria estando a mano.
+
+**En el ordenador solo se muestra uno.** Alli `capture` se ignora y los dos botones abririan el
+mismo dialogo de archivos, que es peor que no tener eleccion. Se distingue por
+`(pointer: coarse)`, no por user agent: un portatil tactil vera los dos botones y ninguno de
+los dos hara nada raro.
+
+El almacenamiento no cambia: la foto sigue comprimiendose en el movil y subiendose al bucket
+privado igual que antes.
+
+---
+
+## 20. El badge del icono va detras del contador de dentro
+
+La Badging API existe en iOS desde 16.4, pero solo para la PWA instalada en la pantalla de
+inicio, solo con permiso de notificaciones concedido, y solo se actualiza mientras la
+aplicacion esta abierta o mientras el service worker atiende un push. Sin push, un cambio que
+haga la otra persona no puede pintar el numero en un icono cerrado: no hay nadie ejecutando
+codigo.
+
+**Asi que el badge no es una fuente de verdad, es un reflejo.** Se pinta el mismo numero de
+avisos sin leer que ya calcula `NotificationsProvider`, sin estado propio que pueda
+desincronizarse, y se limpia solo cuando el contador baja a cero. Donde la API no existe
+(ordenador, Chrome en Android) no hace nada y el aviso sigue siendo la campana de la cabecera.
+
+**El permiso se pide con un boton, no al entrar.** Un prompt de notificaciones nada mas abrir
+es la forma mas rapida de que alguien pulse "No permitir" y deje el badge inservible para
+siempre. Va en la pagina de notificaciones y solo aparece si la API esta y el permiso sigue sin
+decidir.
+
+El push real sigue siendo lo que falta para que el numero aparezca con la aplicacion cerrada.
+Sigue sin construirse (decision 14).
+
 ## Anotado para mas adelante (no construido)
 
 - OCR del ticket para prerrellenar importe y fecha, siempre corregible a mano.

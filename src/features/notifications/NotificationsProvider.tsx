@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { countUnreadNotifications } from './api'
+import { applyAppBadge } from './badge'
 import { NotificationsContext, type NotificationsContextValue } from './notifications-context'
 
 /** Cada cuanto se vuelve a mirar el buzon estando la pestana en primer plano. */
@@ -46,6 +47,13 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [refresh])
+
+  // El contador del icono va detras del contador de dentro: misma cifra, sin
+  // estado propio que pueda desincronizarse. Si el navegador no soporta la
+  // Badging API, `applyAppBadge` no hace nada.
+  useEffect(() => {
+    void applyAppBadge(unread)
+  }, [unread])
 
   const value = useMemo<NotificationsContextValue>(() => ({ unread, refresh }), [unread, refresh])
 

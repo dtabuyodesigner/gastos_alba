@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { validatePhoto } from '../photos/api'
+import { useEffect, useState } from 'react'
+import { PhotoSourcePicker } from '../photos/PhotoSourcePicker'
 
 interface PhotoReplacerProps {
   busy: boolean
@@ -18,7 +18,6 @@ export function PhotoReplacer({ busy, onCancel, onConfirm }: PhotoReplacerProps)
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const input = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!file) {
@@ -30,23 +29,6 @@ export function PhotoReplacer({ busy, onCancel, onConfirm }: PhotoReplacerProps)
     return () => URL.revokeObjectURL(url)
   }, [file])
 
-  function handleChange(event: ChangeEvent<HTMLInputElement>) {
-    const chosen = event.target.files?.[0] ?? null
-    setError(null)
-    if (!chosen) {
-      setFile(null)
-      return
-    }
-    const problem = validatePhoto(chosen)
-    if (problem) {
-      setError(problem)
-      setFile(null)
-      event.target.value = ''
-      return
-    }
-    setFile(chosen)
-  }
-
   return (
     <section className="paysheet" aria-label="Cambiar la foto del ticket">
       <p className="muted">La foto actual se conserva como historico.</p>
@@ -55,25 +37,25 @@ export function PhotoReplacer({ busy, onCancel, onConfirm }: PhotoReplacerProps)
         <img className="photo-picker__preview" src={previewUrl} alt="Foto nueva del ticket" />
       ) : null}
 
-      <input
-        ref={input}
-        className="sr-only"
-        type="file"
-        accept="image/*"
-        capture="environment"
-        onChange={handleChange}
-      />
-
       {error ? (
         <p className="alert alert--error" role="alert">
           {error}
         </p>
       ) : null}
 
+      <PhotoSourcePicker
+        disabled={busy}
+        onSelect={(chosen) => {
+          setError(null)
+          setFile(chosen)
+        }}
+        onReject={(message) => {
+          setError(message)
+          setFile(null)
+        }}
+      />
+
       <div className="actions">
-        <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => input.current?.click()}>
-          {file ? 'Elegir otra' : 'Elegir foto'}
-        </button>
         <button
           type="button"
           className="btn btn--primary"

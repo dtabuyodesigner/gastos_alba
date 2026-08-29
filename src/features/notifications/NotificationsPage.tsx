@@ -7,6 +7,7 @@ import type { AppNotification } from '../../lib/types'
 import { listNotifications, markAllNotificationsRead, markNotificationRead } from './api'
 import { countUnread, formatRelativeTime, notificationLink } from './format'
 import { useNotifications } from './useNotifications'
+import { BadgeSetup } from './BadgeSetup'
 import { Spinner } from '../../components/Spinner'
 import { EmptyState } from '../../components/EmptyState'
 
@@ -49,6 +50,8 @@ export function NotificationsPage() {
           </button>
         ) : null}
       </div>
+
+      <BadgeSetup />
 
       {loading ? <Spinner label="Cargando avisos…" /> : null}
       {error ? <p className="alert alert--error">{error}</p> : null}
