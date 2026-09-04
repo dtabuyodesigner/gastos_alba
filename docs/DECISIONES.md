@@ -309,22 +309,32 @@ configuracion para ganar un minuto en un aviso domestico.
 
 ---
 
-## 14. El push del navegador queda preparado, no operativo
+## 14. El push del navegador es un canal adicional del aviso que ya existe
 
-**Decision.** Existen la tabla `push_subscriptions` con sus politicas y los manejadores
-`push` y `notificationclick` en el service worker. **No existe** ni el alta de la suscripcion
-desde el cliente ni nada que envie un push. Hoy no llega ninguno, y la aplicacion no depende
-de ello: el aviso in-app funciona por su cuenta.
+**Decision.** El push esta implementado de punta a punta: alta de la suscripcion desde el
+cliente (`src/features/notifications/push.ts`, con su boton en Notificaciones), envio desde
+la Edge Function `send-push`, y un trigger `after insert` sobre `notifications` que la llama
+(migracion `0006`). **Requiere configuracion** —claves VAPID y secretos— que depende del
+proyecto Supabase concreto; sin ella no sale ningun envio.
 
-**Por que no esta terminado.** Un push real necesita cuatro piezas, y tres de ellas no se
-pueden dejar hechas ni verificadas sin credenciales del proyecto: un par de claves VAPID, el
-alta de la suscripcion en el navegador, una funcion servidor que firme y envie, y un
-disparador desde la base de datos. Escribir ese codigo sin poder ejecutarlo una sola vez
-seria dejar algo que parece hecho y no lo esta, que es peor que dejarlo pendiente.
+**Por que colgado del insert y no en paralelo.** El aviso in-app es la fuente de verdad. Si
+el push saliera por su cuenta desde el codigo que crea el gasto, podrian desincronizarse:
+una notificacion sonada que no esta en la bandeja, o al reves. Colgandolo del `insert` en
+`notifications` solo hay una manera de que exista un aviso, y el push es una consecuencia.
 
-**Lo que falta, exactamente,** esta en el apartado "Push" de `docs/supabase/BOOTSTRAP.md`. La
-parte que si esta escrita —el service worker— es correcta y funcionara el dia que llegue un
-push, pero **no se ha podido probar** porque no hay nada que envie.
+**Por que el push nunca puede tumbar la transaccion.** El trigger usa `pg_net`, que encola
+la peticion y devuelve al instante, y ademas atrapa cualquier error. Si el push esta sin
+configurar o el servidor de Google no responde, el ticket se guarda igual. Un fallo en el
+canal secundario no puede impedir el registro de un gasto.
+
+**Por que iOS obliga a instalar la app.** Safari solo entrega push a una PWA anadida a la
+pantalla de inicio (iOS 16.4+). Como el caso real de uso son dos iPhone, la interfaz lo
+explica en vez de ofrecer un boton que no haria nada. Es la limitacion mas importante de
+todo el apartado.
+
+**Baja logica, tambien aqui.** Una suscripcion revocada (app desinstalada, permiso retirado)
+no se borra: la funcion la marca `disabled_at` al recibir un 404 o un 410, coherente con el
+resto del proyecto.
 
 **Sin secretos en el cliente.** La clave privada VAPID es de servidor. En el frontend solo
 entraria la clave publica, que es publica por definicion. La `service_role` no aparece por
@@ -464,7 +474,6 @@ quedan fuera del total.
 - Invitacion de una segunda persona pagadora.
 - Repartos por importe fijo, ademas de por porcentaje.
 - Varios hijos o varios nucleos (`household_id`, ver decision 3).
-- Push real del navegador: claves VAPID, alta de suscripcion y funcion de envio (decision 14).
 - Avisos de tickets pendientes acumulados, y resumen mensual.
 - Email, WhatsApp y Telegram como canales de aviso: descartados, no pendientes (decision 13).
 - Limpieza programada de ficheros huerfanos en el bucket (ver decision 9). Hoy es una tarea

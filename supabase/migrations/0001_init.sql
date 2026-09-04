@@ -552,11 +552,12 @@ create trigger notifications_guard
   for each row execute function public.notifications_guard_update();
 
 -- -----------------------------------------------------------------------------
--- push_subscriptions — PREPARADO, NO OPERATIVO
+-- push_subscriptions — una fila por dispositivo dado de alta
 --
--- La tabla existe para que el dia que se configure el push del navegador no
--- haya que migrar datos. Hoy NADA escribe aqui: faltan las claves VAPID, el
--- alta de la suscripcion desde el cliente y la funcion servidor que envie.
+-- El alta la escribe el cliente (src/features/notifications/push.ts) cuando
+-- alguien pulsa "Activar avisos"; el envio lo hace la Edge Function `send-push`,
+-- disparada por el trigger de la migracion 0006. Sin las claves VAPID
+-- configuradas la tabla se queda vacia y la aplicacion funciona igual.
 -- Ver docs/DECISIONES.md y el apartado "Push" de docs/supabase/BOOTSTRAP.md.
 -- -----------------------------------------------------------------------------
 create table if not exists public.push_subscriptions (

@@ -9,6 +9,7 @@ import { countUnread, formatRelativeTime, notificationLink } from './format'
 import { useNotifications } from './useNotifications'
 import { Spinner } from '../../components/Spinner'
 import { EmptyState } from '../../components/EmptyState'
+import { PushSetup } from './PushSetup'
 
 export function NotificationsPage() {
   const loader = useCallback(() => listNotifications(), [])
@@ -49,6 +50,8 @@ export function NotificationsPage() {
           </button>
         ) : null}
       </div>
+
+      <PushSetup />
 
       {loading ? <Spinner label="Cargando avisos…" /> : null}
       {error ? <p className="alert alert--error">{error}</p> : null}

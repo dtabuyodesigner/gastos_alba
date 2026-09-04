@@ -4,6 +4,7 @@ import rlsSql from '../../supabase/migrations/0002_rls.sql?raw'
 import storageSql from '../../supabase/migrations/0003_storage.sql?raw'
 import updateSql from '../../supabase/migrations/0004_update_after_mvp_reviews.sql?raw'
 import voidPaymentsSql from '../../supabase/migrations/0005_void_payments.sql?raw'
+import pushDispatchSql from '../../supabase/migrations/0006_push_dispatch.sql?raw'
 import { PAYMENT_METHODS } from '../features/payments/methods'
 
 /**
@@ -422,5 +423,43 @@ describe('0005: deshacer pagos sobre una base ya en marcha', () => {
     expect(codigo).toMatch(/add constraint payments_voided_consistency/)
     expect(codigo).toMatch(/create index if not exists payments_active_idx/)
     expect(codigo).toMatch(/grant execute on function public\.void_payment/)
+  })
+})
+
+
+describe('0006: disparador del push', () => {
+  const body = functionBody(pushDispatchSql, 'notifications_dispatch_push')
+
+  it('es SECURITY DEFINER con search_path fijado', () => {
+    // DEFINER porque tiene que leer Vault, al que nadie mas llega.
+    expect(body).toMatch(/security definer/)
+    expect(body).toMatch(/set search_path = public, extensions, vault, pg_temp/)
+  })
+
+  it('no lleva la URL ni el secreto escritos en el SQL', () => {
+    // Ambos salen de Vault. Si alguien los incrusta aqui, quedan en el esquema
+    // en claro y cualquiera con acceso a la definicion del trigger los ve.
+    expect(body).not.toMatch(/https:\/\/[a-z0-9-]+\.supabase\.co/)
+    expect(body).toMatch(/from vault\.decrypted_secrets where name = 'push_hook_url'/)
+    expect(body).toMatch(/from vault\.decrypted_secrets where name = 'push_hook_secret'/)
+  })
+
+  it('nunca tumba la transaccion que creo el aviso', () => {
+    // El aviso dentro de la app es la fuente de verdad: si el push falla, se
+    // registra el ticket igual. Sin push configurado tampoco puede fallar.
+    expect(body).toMatch(/if hook_url is null or hook_secret is null then\s+return null;/)
+    expect(body).toMatch(/exception/)
+    expect(body).toMatch(/when others then/)
+  })
+
+  it('se dispara AFTER INSERT y nadie mas puede llamarlo', () => {
+    expect(pushDispatchSql).toMatch(/after insert on public\.notifications/)
+    expect(pushDispatchSql).toMatch(
+      /revoke all on function public\.notifications_dispatch_push\(\) from public, anon, authenticated/,
+    )
+  })
+
+  it('no borra nada', () => {
+    expect(pushDispatchSql).not.toMatch(/drop table|truncate|delete from/i)
   })
 })

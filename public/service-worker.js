@@ -67,21 +67,18 @@ self.addEventListener('fetch', (event) => {
 })
 
 /*
- * Push del navegador — PREPARADO, NO OPERATIVO.
+ * Push del navegador.
  *
- * Estos dos manejadores son lo unico que hace falta en el cliente para RECIBIR
- * un push. Estan escritos y son correctos, pero hoy no llega ninguno: falta
- * generar las claves VAPID, dar de alta la suscripcion desde la aplicacion y
- * escribir la funcion servidor que envie. Ver el apartado "Push" de
- * docs/supabase/BOOTSTRAP.md.
- *
- * Mientras tanto, el aviso vive dentro de la aplicacion (tabla `notifications`)
- * y no depende de esto para nada.
+ * Estos dos manejadores son todo lo que hace falta en el cliente para RECIBIR
+ * un push. El alta de la suscripcion esta en src/features/notifications/push.ts
+ * y el envio en la Edge Function `send-push`. Si el despliegue no tiene las
+ * claves VAPID configuradas no llega nada, y no pasa nada: el aviso sigue
+ * dentro de la aplicacion (tabla `notifications`), que es la fuente de verdad.
+ * Ver el apartado "Push del navegador" de docs/supabase/BOOTSTRAP.md.
  *
  * Nota de privacidad: aqui no se cachea nada. El payload de un push puede
  * contener el concepto de un ticket y no debe quedar en disco.
  */
-
 self.addEventListener('push', (event) => {
   let payload = {}
   try {

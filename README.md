@@ -33,10 +33,13 @@ Anotar el metodo es solo eso: **una etiqueta de registro**. La aplicacion no mue
 habla con Bizum ni con ningun banco, no hay pasarela de pago y no se guarda ningun dato
 bancario. El dinero se mueve fuera, como siempre.
 
-Los avisos **no salen de la aplicacion**: no hay email, ni WhatsApp, ni Telegram, y es
-deliberado (ver `docs/DECISIONES.md`). El push del navegador esta preparado pero **no
-operativo**: falta configurarlo, y el apartado "Push" de `docs/supabase/BOOTSTRAP.md` dice
-exactamente que.
+No hay avisos por email, ni WhatsApp, ni Telegram, y es deliberado (ver
+`docs/DECISIONES.md`). El unico canal fuera de la aplicacion es el **push del navegador**,
+que esta implementado pero **requiere configuracion propia** —claves VAPID, la Edge Function
+desplegada y la app instalada en la pantalla de inicio de cada movil—. Mientras no se
+configure, los avisos siguen viviendo solo dentro de la aplicacion y todo lo demas funciona
+igual. Los pasos exactos, y la comprobacion real que hay que pasar, estan en el apartado
+"Push del navegador" de `docs/supabase/BOOTSTRAP.md`.
 
 ## Stack
 
@@ -88,9 +91,11 @@ Antes de que la app funcione hay que preparar el proyecto Supabase. Los pasos es
 4. `0004_update_after_mvp_reviews.sql` — parche idempotente **solo para bases que ya
    ejecutaron los tres anteriores en una version antigua**.
 5. `0005_void_payments.sql` — deshacer pagos. Necesario en cualquier base ya en marcha.
+6. `0006_push_dispatch.sql` — disparador del push del navegador. Solo hace algo si has
+   completado la configuracion del push; si no, es inofensivo.
 
 En un proyecto nuevo ejecuta 1, 2 y 3 en ese orden desde el SQL Editor; el 4 y el 5 no hacen
-falta (y tampoco estorban). Si tu proyecto ya estaba creado, ejecuta los parches que te
+falta (y tampoco estorban), y el 6 va cuando montes el push. Si tu proyecto ya estaba creado, ejecuta los parches que te
 falten: reejecutar el 1 no aplicaria los cambios, porque crea las tablas con
 `create table if not exists`. El detalle esta en `docs/supabase/BOOTSTRAP.md`.
 
@@ -122,6 +127,7 @@ src/
   pages/          Inicio, historico y 404
 supabase/
   migrations/     SQL a ejecutar en orden
+  functions/      Edge Functions (send-push: envio del push del navegador)
 docs/             Decisiones tecnicas y guia de Supabase
 ```
 
