@@ -1053,6 +1053,33 @@ textarea.input {
   font-size: 0.9rem;
 }
 
+/* Tarjeta de alta del push, en la pagina de notificaciones. Se distingue de la
+   lista de avisos con el fondo secundario: es un ajuste, no un aviso mas. */
+.push-setup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.push-setup__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.push-setup__text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+/* El contador del icono es un ajuste secundario y va debajo del push: se deja
+   mas discreto a proposito, sin borde y sobre el fondo normal. */
 .badge-setup {
   display: flex;
   flex-direction: column;

@@ -157,8 +157,8 @@ falta: el rol `dani` ya puede corregir y pagar cualquier ticket.
 > lista de comprobacion que hay que completar **entera** antes de compartir la URL con
 > nadie. Hasta que las 14 casillas esten marcadas, la aplicacion no esta validada.
 >
-> El push del navegador no entra en esta lista porque **no esta implementado**: ver el
-> apartado "Push del navegador" mas abajo.
+> El push del navegador no entra en esta lista: esta implementado pero requiere sus propias
+> claves y su propia comprobacion, en el apartado "Push del navegador" mas abajo.
 
 Necesitas dos navegadores o dos ventanas privadas para poder estar como Alba y como Dani a
 la vez. Anota el resultado de cada punto.
@@ -835,18 +835,22 @@ exportar de vez en cuando:
 ```bash
 supabase db dump --db-url "postgresql://..." -f copia-gastos-alba.sql
 ```
+## Push del navegador — implementado, pendiente de configurar
 
-## Push del navegador — PENDIENTE, no operativo
+**El codigo esta completo; sin los pasos de abajo no sale ni un envio.** Mientras tanto la
+aplicacion funciona igual: el aviso vive en la tabla `notifications` y no depende de esto.
 
-**Estado actual: no llega ningun push, y no se ha probado ningun envio.** Lo unico que existe
-es la infraestructura de recepcion:
+Piezas ya escritas:
 
-- la tabla `push_subscriptions` con sus politicas RLS (creada en `0001` y `0002`);
-- los manejadores `push` y `notificationclick` en `public/service-worker.js`.
+| Pieza | Donde |
+|---|---|
+| Recepcion en el navegador | `public/service-worker.js` (`push`, `notificationclick`) |
+| Alta y baja de la suscripcion | `src/features/notifications/push.ts` |
+| Boton en la interfaz | `src/features/notifications/PushSetup.tsx`, dentro de Notificaciones |
+| Envio | Edge Function `supabase/functions/send-push` |
+| Disparador | Trigger `notifications_push_dispatch` (migracion `0006`) |
 
-Los avisos dentro de la aplicacion **no dependen de esto** y funcionan sin ello.
-
-### Lo que falta, en orden
+### Puesta en marcha, en orden
 
 **1. Generar el par de claves VAPID.**
 
@@ -854,49 +858,76 @@ Los avisos dentro de la aplicacion **no dependen de esto** y funcionan sin ello.
 npx web-push generate-vapid-keys
 ```
 
-La **publica** puede ir al frontend (es publica por definicion); la **privada** es de
-servidor y no entra jamas en el repositorio ni en una variable `VITE_`.
+La **publica** va al frontend (lo es por definicion); la **privada** es de servidor y no
+entra jamas en el repositorio ni en una variable `VITE_`.
+
+**2. Variables y secretos.**
 
 | Variable | Donde vive |
 |---|---|
-| `VITE_VAPID_PUBLIC_KEY` | Frontend (Vercel, entorno del cliente) |
-| `VAPID_PRIVATE_KEY` | Solo servidor (Supabase Edge Function secrets) |
-| `VAPID_SUBJECT` | Solo servidor: `mailto:` de contacto que exige el estandar |
+| `VITE_VAPID_PUBLIC_KEY` | Vercel, entorno del cliente (y `.env.local` en local) |
+| `VAPID_PUBLIC_KEY` | Secreto de la Edge Function (la misma clave) |
+| `VAPID_PRIVATE_KEY` | Secreto de la Edge Function, solo servidor |
+| `VAPID_SUBJECT` | Secreto de la Edge Function: `mailto:` de contacto que exige el estandar |
+| `PUSH_HOOK_SECRET` | Secreto compartido entre el trigger y la funcion |
 
-**2. Alta de la suscripcion desde el cliente.** Falta escribir: pedir permiso con
-`Notification.requestPermission()`, suscribirse con
-`registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` y
-guardar `endpoint`, `p256dh` y `auth` en `push_subscriptions`. La tabla y las politicas ya
-lo admiten.
+```bash
+supabase secrets set \
+  VAPID_PUBLIC_KEY='...' \
+  VAPID_PRIVATE_KEY='...' \
+  VAPID_SUBJECT='mailto:tu@correo.com' \
+  PUSH_HOOK_SECRET="$(openssl rand -hex 32)"
+```
 
-**3. Funcion servidor que envie.** Una Edge Function de Supabase que lea las suscripciones
-activas del destinatario, firme con la clave privada VAPID y haga el envio (con `web-push` o
-equivalente). Debe marcar `disabled_at` cuando el endpoint responda 404 o 410: una
-suscripcion caducada no se borra, se desactiva.
+**3. Desplegar la funcion.**
 
-**4. Disparador.** Un webhook de base de datos sobre `insert` en `notifications` que llame a
-esa funcion. De este modo el push seria un canal adicional del aviso que ya existe, no un
-camino paralelo que pueda desincronizarse.
+```bash
+supabase functions deploy send-push --no-verify-jwt
+```
 
-### Checklist de permisos, para cuando se implemente
+`--no-verify-jwt` porque quien llama es el trigger de la base de datos, no una persona con
+sesion. La funcion no queda abierta: rechaza con 403 todo lo que no traiga la cabecera
+`x-push-secret` correcta.
 
-- **Android / Chrome:** funciona con la PWA instalada o desde el navegador. Requiere HTTPS.
-- **iOS / Safari:** requiere iOS 16.4 o superior **y** que la aplicacion este anadida a la
-  pantalla de inicio. Desde Safari, sin instalar, no hay push. Es la limitacion mas
-  importante a tener en cuenta, porque afecta al caso real de uso.
-- El permiso lo debe pedir un gesto de la persona (un boton), nunca al cargar la pagina: los
-  navegadores penalizan lo segundo y algunos lo bloquean.
-- Si alguien deniega el permiso, no se puede volver a preguntar desde la aplicacion: hay que
-  cambiarlo en los ajustes del navegador. Conviene que la interfaz lo diga.
-- Comprobar que el service worker esta registrado (`navigator.serviceWorker.getRegistration()`)
-  antes de intentar suscribir.
+**4. Guardar la URL y el secreto en Vault** (SQL, una sola vez; el secreto tiene que ser
+exactamente el mismo `PUSH_HOOK_SECRET` del paso 2):
 
-### Como se comprobaria que funciona de verdad
+```sql
+select vault.create_secret(
+  'https://TU-REF.supabase.co/functions/v1/send-push', 'push_hook_url');
+select vault.create_secret('EL_MISMO_PUSH_HOOK_SECRET', 'push_hook_secret');
+```
 
-No basta con que la suscripcion se guarde. Habria que verificar, con la aplicacion **cerrada**
-en el movil: que Alba sube un ticket y al movil de Dani le llega la notificacion del sistema;
-que al tocarla se abre el ticket correcto; y que una suscripcion revocada queda con
-`disabled_at`. Hasta que eso se haya hecho al menos una vez, el push no esta hecho.
+**5. Ejecutar la migracion `0006_push_dispatch.sql`.**
+
+**6. Instalar la app en cada movil.** En iPhone es obligatorio: Compartir → «Anadir a
+pantalla de inicio». Luego, abriendo la app **desde ese icono**, entrar en Notificaciones y
+pulsar «Activar avisos».
+
+### Limitaciones que hay que tener presentes
+
+- **iOS / Safari:** requiere iOS 16.4 o superior **y** la app anadida a la pantalla de
+  inicio. Desde Safari, sin instalar, no hay push: no es un fallo, es como funciona iOS. La
+  interfaz lo explica en vez de ofrecer un boton que no haria nada.
+- **Android / Chrome:** funciona instalada o desde el navegador. Requiere HTTPS.
+- El permiso lo pide un gesto de la persona (el boton), nunca la carga de la pagina.
+- Si alguien **deniega** el permiso, no se puede volver a preguntar desde la aplicacion: hay
+  que cambiarlo en los ajustes del dispositivo. La interfaz lo dice.
+- La suscripcion es **por dispositivo**: activarla en el movil no la activa en el portatil.
+- Una suscripcion revocada (app desinstalada, permiso retirado) no se borra: la funcion la
+  marca `disabled_at` al recibir un 404 o un 410.
+
+### Como se comprueba que funciona de verdad
+
+No basta con que la suscripcion se guarde. Con la aplicacion **cerrada** en el movil:
+
+1. Alba sube un ticket y al movil de Dani le llega la notificacion del sistema.
+2. Al tocarla se abre el ticket correcto.
+3. Dani marca un pago y a Alba le llega el suyo.
+4. Desinstalar la app en un movil y comprobar que su fila queda con `disabled_at` tras el
+   siguiente envio.
+
+Hasta que eso se haya hecho al menos una vez, el push no esta hecho.
 
 ## Operaciones habituales
 

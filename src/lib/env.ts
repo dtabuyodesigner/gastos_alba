@@ -57,3 +57,17 @@ export function readSupabaseConfig(): ConfigResult {
 
   return { ok: true, config: { url, anonKey, bucket } }
 }
+
+/**
+ * Clave publica VAPID para el push del navegador.
+ *
+ * Es publica por definicion (viaja al cliente y se la damos al navegador). La
+ * privada vive solo en los secretos de la Edge Function y no entra jamas aqui.
+ *
+ * Devuelve null si no esta configurada: el push simplemente no se ofrece, y el
+ * resto de la aplicacion sigue igual.
+ */
+export function readVapidPublicKey(): string | null {
+  const key = (import.meta.env.VITE_VAPID_PUBLIC_KEY ?? '').trim()
+  return key.length > 0 ? key : null
+}

@@ -10,6 +10,7 @@ import { useNotifications } from './useNotifications'
 import { BadgeSetup } from './BadgeSetup'
 import { Spinner } from '../../components/Spinner'
 import { EmptyState } from '../../components/EmptyState'
+import { PushSetup } from './PushSetup'
 
 export function NotificationsPage() {
   const loader = useCallback(() => listNotifications(), [])
@@ -51,6 +52,10 @@ export function NotificationsPage() {
         ) : null}
       </div>
 
+      {/* El push va primero a proposito: el permiso que pide es el MISMO que
+          necesita el contador del icono, asi que activando los avisos se
+          resuelven los dos de una vez y BadgeSetup se oculta solo. */}
+      <PushSetup />
       <BadgeSetup />
 
       {loading ? <Spinner label="Cargando avisos…" /> : null}
