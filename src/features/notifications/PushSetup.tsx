@@ -35,7 +35,10 @@ export function PushSetup() {
     }
   }
 
-  // Mientras se resuelve, o si el navegador no puede, no se ensucia la pagina.
+  // Mientras se resuelve, o donde el navegador de verdad no puede hacer push
+  // (y por tanto no hay nada que decir ni que arreglar), no se ensucia la
+  // pagina. Cualquier otro estado se muestra, aunque sea para explicar por que
+  // no se puede activar todavia.
   if (status === null || status === 'unsupported') return null
 
   return (
@@ -46,6 +49,14 @@ export function PushSetup() {
         <p className="push-setup__text muted">
           Para recibir avisos en el iPhone, primero anade la app a la pantalla de inicio: boton
           Compartir → «Anadir a pantalla de inicio». Despues abrela desde ese icono y vuelve aqui.
+        </p>
+      ) : null}
+
+      {status === 'not-configured' ? (
+        <p className="push-setup__text muted">
+          Los avisos todavia no estan configurados en este despliegue: falta la clave publica
+          VAPID. No es cosa de tu movil. Ver el apartado «Push del navegador» de
+          docs/supabase/BOOTSTRAP.md.
         </p>
       ) : null}
 

@@ -18,10 +18,12 @@ import { supabase } from '../../lib/supabase'
 import { readVapidPublicKey } from '../../lib/env'
 
 export type PushStatus =
-  /** El navegador no sabe hacer push (o falta configurar la clave VAPID). */
+  /** El navegador no sabe hacer push. Aqui no hay nada que ofrecer. */
   | 'unsupported'
   /** iPhone/iPad en Safari: hace falta anadir la app a la pantalla de inicio. */
   | 'needs-install'
+  /** El navegador puede, pero este despliegue no tiene clave VAPID. */
+  | 'not-configured'
   /** Permiso denegado: solo se arregla desde los ajustes del dispositivo. */
   | 'denied'
   /** Se puede activar. */
@@ -51,15 +53,20 @@ function isAppleMobile(): boolean {
  */
 export async function readPushStatus(): Promise<PushStatus> {
   if (typeof window === 'undefined') return 'unsupported'
-  if (!readVapidPublicKey()) return 'unsupported'
 
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    // En un iPhone sin instalar, esto es exactamente lo que pasa: el motivo real
-    // no es que el movil no pueda, es que falta anadirla a la pantalla de inicio.
-    return isAppleMobile() && !isStandalone() ? 'needs-install' : 'unsupported'
-  }
-
+  // El orden importa, y se aprendio por las malas. Lo primero es el motivo mas
+  // probable y el mas accionable: en un iPhone sin instalar no existe siquiera
+  // `PushManager`, asi que preguntar antes por el soporte contaria como "este
+  // movil no puede" cuando en realidad solo falta anadir la app al inicio.
   if (isAppleMobile() && !isStandalone()) return 'needs-install'
+
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported'
+
+  // Falta la clave VAPID en el build. Es un fallo de despliegue, no del
+  // dispositivo, y la interfaz tiene que DECIRLO: la version anterior escondia
+  // la tarjeta entera y dejaba a quien mirase sin ninguna pista de que pasaba.
+  if (!readVapidPublicKey()) return 'not-configured'
+
   if (Notification.permission === 'denied') return 'denied'
 
   const registration = await navigator.serviceWorker.getRegistration()
