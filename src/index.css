@@ -286,6 +286,38 @@ code {
   text-align: center;
 }
 
+/* Firma de autoria al pie de la tarjeta de entrada. */
+.credit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.credit__avatar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.credit__text {
+  display: flex;
+  flex-direction: column;
+}
+
+.credit__mail {
+  color: inherit;
+  /* El correo se parte solo en pantallas estrechas en vez de desbordar. */
+  overflow-wrap: anywhere;
+}
+
 /* --- Formularios ---------------------------------------------------------- */
 
 .form {

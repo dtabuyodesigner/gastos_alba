@@ -133,6 +133,16 @@ export function LoginPage() {
         >
           {resetMode ? 'Volver a entrar' : 'He olvidado mi contrasena'}
         </button>
+
+        <p className="credit">
+          <img className="credit__avatar" src="/img/caricatura-dani.png" alt="" width={44} height={44} />
+          <span className="credit__text">
+            Disenada por Dani Tabuyo
+            <a className="credit__mail" href="mailto:dtabuyodesigner@gmail.com">
+              dtabuyodesigner@gmail.com
+            </a>
+          </span>
+        </p>
       </form>
     </div>
   )
