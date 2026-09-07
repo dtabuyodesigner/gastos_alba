@@ -69,11 +69,41 @@ function ensureVapid(): boolean {
   }
 }
 
+/**
+ * Credencial de servidor, con los dos nombres que usa Supabase.
+ *
+ * Esta funcion tiene que leer las suscripciones del OTRO, cosa que el RLS
+ * (correctamente) prohibe a cualquier persona. Para eso hace falta una clave de
+ * servidor.
+ *
+ * Los proyectos nuevos emiten `SUPABASE_SECRET_KEYS`, un diccionario JSON, y
+ * marcan como obsoleta la vieja `SUPABASE_SERVICE_ROLE_KEY`. Se aceptan las dos
+ * para que la funcion valga en un proyecto de cualquier edad.
+ */
+function readServiceKey(): { key: string; source: string } {
+  const raw = Deno.env.get('SUPABASE_SECRET_KEYS') ?? ''
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw)
+      const values = Array.isArray(parsed) ? parsed : Object.values(parsed)
+      const first = values.find((v) => typeof v === 'string' && v.length > 0)
+      if (typeof first === 'string') return { key: first, source: 'SUPABASE_SECRET_KEYS' }
+    } catch {
+      // Formato inesperado: se intenta con la clave heredada antes de rendirse.
+    }
+  }
+
+  const legacy = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  if (legacy) return { key: legacy, source: 'SUPABASE_SERVICE_ROLE_KEY' }
+
+  return { key: '', source: 'NINGUNA' }
+}
+
+const service = readServiceKey()
+
 const admin = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
-  // Service role: esta funcion tiene que leer las suscripciones del OTRO, cosa
-  // que el RLS (correctamente) prohibe a cualquier persona.
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+  service.key,
   { auth: { persistSession: false } },
 )
 
@@ -82,6 +112,14 @@ function targetUrl(row: NotificationRow): string {
   if (row.expense_id) return `/gastos/${row.expense_id}`
   if (row.payment_id) return '/historico'
   return '/notificaciones'
+}
+
+/** Respuesta JSON. El cuerpo acaba en net._http_response y se lee con SQL. */
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })
 }
 
 Deno.serve(async (request) => {
@@ -115,15 +153,25 @@ Deno.serve(async (request) => {
 
   if (!row?.recipient_profile_id) return new Response('Bad request', { status: 400 })
 
+  // Sin credencial de servidor no se puede ni mirar. Se responde con un error
+  // VISIBLE a proposito: la version anterior devolvia `sent: 0` en este caso, lo
+  // que se lee como "esta persona no tiene ningun movil dado de alta" y mando
+  // dos dias de diagnostico en la direccion equivocada.
+  if (!service.key) {
+    console.error('Sin clave de servidor: revisa SUPABASE_SECRET_KEYS.')
+    return json({ error: 'sin-clave-de-servidor', keySource: service.source }, 500)
+  }
+
   const { data: subscriptions, error } = await admin
     .from('push_subscriptions')
     .select('id, endpoint, p256dh, auth')
     .eq('profile_id', row.recipient_profile_id)
     .is('disabled_at', null)
 
+  // Un fallo leyendo tampoco puede disfrazarse de "no hay a quien enviar".
   if (error) {
     console.error('No se han podido leer las suscripciones:', error.message)
-    return new Response(JSON.stringify({ sent: 0 }), { status: 200 })
+    return json({ error: 'lectura-fallida', detail: error.message, keySource: service.source }, 500)
   }
 
   const payload = JSON.stringify({
@@ -136,6 +184,9 @@ Deno.serve(async (request) => {
 
   let sent = 0
   const expired: string[] = []
+  // Los rechazos se DEVUELVEN, no solo se escriben en el log: el log de la
+  // funcion no se ve desde SQL, y esto se diagnostica desde SQL.
+  const failures: { status?: number; message: string }[] = []
 
   await Promise.all(
     ((subscriptions ?? []) as SubscriptionRow[]).map(async (subscription) => {
@@ -152,8 +203,15 @@ Deno.serve(async (request) => {
         const status = (err as { statusCode?: number }).statusCode
         // 404/410: el navegador ha revocado la suscripcion (app desinstalada,
         // permiso retirado). No se borra la fila, se desactiva.
-        if (status === 404 || status === 410) expired.push(subscription.id)
-        else console.error('Fallo al enviar push:', status, (err as Error).message)
+        if (status === 404 || status === 410) {
+          expired.push(subscription.id)
+        } else {
+          const message = (err as Error).message ?? ''
+          console.error('Fallo al enviar push:', status, message)
+          // Un 403 aqui casi siempre significa que la clave publica con la que se
+          // creo la suscripcion no es pareja de la privada que esta firmando.
+          failures.push({ status, message: message.slice(0, 200) })
+        }
       }
     }),
   )
@@ -165,8 +223,16 @@ Deno.serve(async (request) => {
       .in('id', expired)
   }
 
-  return new Response(JSON.stringify({ sent, disabled: expired.length }), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  })
+  // `found` distingue "no habia a quien enviar" de "habia y fallaron todos".
+  // Ese matiz se ve luego desde SQL en net._http_response, que es donde se
+  // diagnostica esto sin poder abrir la consola del movil.
+  return json(
+    {
+      sent,
+      found: subscriptions?.length ?? 0,
+      disabled: expired.length,
+      ...(failures.length > 0 ? { failures } : {}),
+    },
+    200,
+  )
 })

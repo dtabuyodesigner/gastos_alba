@@ -65,13 +65,21 @@ export async function readPushStatus(): Promise<PushStatus> {
   // Falta la clave VAPID en el build. Es un fallo de despliegue, no del
   // dispositivo, y la interfaz tiene que DECIRLO: la version anterior escondia
   // la tarjeta entera y dejaba a quien mirase sin ninguna pista de que pasaba.
-  if (!readVapidPublicKey()) return 'not-configured'
+  const vapidPublicKey = readVapidPublicKey()
+  if (!vapidPublicKey) return 'not-configured'
 
   if (Notification.permission === 'denied') return 'denied'
 
   const registration = await navigator.serviceWorker.getRegistration()
   const subscription = await registration?.pushManager.getSubscription()
-  return subscription ? 'enabled' : 'idle'
+  if (!subscription) return 'idle'
+
+  // Suscripcion heredada de un par VAPID anterior: existe, pero sus envios los
+  // rechaza el servidor de Apple. Cuenta como NO activada, para que la tarjeta
+  // ofrezca «Activar avisos» y al pulsarlo se rehaga sola.
+  if (!matchesKey(subscription, urlBase64ToUint8Array(vapidPublicKey))) return 'idle'
+
+  return 'enabled'
 }
 
 /**
@@ -89,17 +97,44 @@ export async function enablePush(): Promise<PushStatus> {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return permission === 'denied' ? 'denied' : 'idle'
 
-  // Si ya habia una suscripcion se reutiliza: volver a suscribir con otra clave
-  // VAPID falla, y con la misma devuelve la que ya existe.
+  const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey)
+
+  // Una suscripcion queda atada PARA SIEMPRE a la clave publica con la que se
+  // creo. Si el despliegue cambia de par VAPID, reutilizarla no da error aqui:
+  // falla mucho despues, con un 403 del servidor de Apple al enviar, y desde el
+  // movil no hay forma de sospecharlo. Asi que si la que hay quedo huerfana, se
+  // da de baja y se rehace.
+  const existing = await registration.pushManager.getSubscription()
+  if (existing && !matchesKey(existing, applicationServerKey)) {
+    await markDisabled(existing.endpoint)
+    await existing.unsubscribe()
+  }
+
   const subscription =
     (await registration.pushManager.getSubscription()) ??
-    (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-    }))
+    (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }))
 
   await saveSubscription(subscription)
   return 'enabled'
+}
+
+/** ¿Esta suscripcion se creo con la clave publica que usa hoy el despliegue? */
+function matchesKey(subscription: PushSubscription, key: Uint8Array): boolean {
+  const current = subscription.options?.applicationServerKey
+  // Sin dato no se puede afirmar que este huerfana; se deja como esta.
+  if (!current) return true
+  const bytes = new Uint8Array(current as ArrayBuffer)
+  if (bytes.length !== key.length) return false
+  return bytes.every((byte, i) => byte === key[i])
+}
+
+/** Baja logica de una suscripcion por su endpoint. La fila nunca se borra. */
+async function markDisabled(endpoint: string): Promise<void> {
+  const { error } = await supabase
+    .from('push_subscriptions')
+    .update({ disabled_at: new Date().toISOString() })
+    .eq('endpoint', endpoint)
+  if (error) throw error
 }
 
 /**
@@ -111,12 +146,7 @@ export async function disablePush(): Promise<PushStatus> {
   const subscription = await registration?.pushManager.getSubscription()
   if (!subscription) return 'idle'
 
-  const { error } = await supabase
-    .from('push_subscriptions')
-    .update({ disabled_at: new Date().toISOString() })
-    .eq('endpoint', subscription.endpoint)
-  if (error) throw error
-
+  await markDisabled(subscription.endpoint)
   await subscription.unsubscribe()
   return 'idle'
 }

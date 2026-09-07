@@ -861,25 +861,47 @@ npx web-push generate-vapid-keys
 La **publica** va al frontend (lo es por definicion); la **privada** es de servidor y no
 entra jamas en el repositorio ni en una variable `VITE_`.
 
-**2. Variables y secretos.**
+**2. Generar el secreto compartido, UNA sola vez.**
+
+```bash
+openssl rand -hex 32
+```
+
+Apunta esos 64 caracteres. **El mismo valor va en dos sitios** (paso 3 y paso 4) y tiene que
+coincidir caracter por caracter: si no, la funcion responde `403` y no sale ningun aviso.
+
+> No pegues aqui un texto de ejemplo. Cualquier cadena que aparezca en este repositorio es
+> publica, y quien la lea podria llamar a la funcion y provocar notificaciones. Genera la
+> tuya con el comando de arriba.
+
+**3. Variables y secretos.**
 
 | Variable | Donde vive |
 |---|---|
 | `VITE_VAPID_PUBLIC_KEY` | Vercel, entorno del cliente (y `.env.local` en local) |
-| `VAPID_PUBLIC_KEY` | Secreto de la Edge Function (la misma clave) |
+| `VAPID_PUBLIC_KEY` | Secreto de la Edge Function — **la misma clave publica** que la de Vercel |
 | `VAPID_PRIVATE_KEY` | Secreto de la Edge Function, solo servidor |
 | `VAPID_SUBJECT` | Secreto de la Edge Function: `mailto:` de contacto que exige el estandar |
-| `PUSH_HOOK_SECRET` | Secreto compartido entre el trigger y la funcion |
+| `PUSH_HOOK_SECRET` | Secreto de la Edge Function: el valor del paso 2 |
+
+Con el CLI:
 
 ```bash
 supabase secrets set \
   VAPID_PUBLIC_KEY='...' \
   VAPID_PRIVATE_KEY='...' \
   VAPID_SUBJECT='mailto:tu@correo.com' \
-  PUSH_HOOK_SECRET="$(openssl rand -hex 32)"
+  PUSH_HOOK_SECRET='el-valor-del-paso-2'
 ```
 
-**3. Desplegar la funcion.**
+Sin CLI, desde el panel: **Project Settings → Edge Functions → Secrets**. Cuidado al pegar
+con los espacios o saltos de linea al final; uno invisible basta para un `403`.
+
+`VITE_VAPID_PUBLIC_KEY` va en Vercel, y ahi hay una trampa: **Vite congela esa variable al
+construir**. Anadirla no cambia nada hasta que se vuelve a desplegar. Si la app no muestra
+la tarjeta de «Activar avisos», casi siempre es esto.
+
+**4. Desplegar la funcion.**
 
 ```bash
 supabase functions deploy send-push --no-verify-jwt
@@ -889,18 +911,29 @@ supabase functions deploy send-push --no-verify-jwt
 sesion. La funcion no queda abierta: rechaza con 403 todo lo que no traiga la cabecera
 `x-push-secret` correcta.
 
-**4. Guardar la URL y el secreto en Vault** (SQL, una sola vez; el secreto tiene que ser
-exactamente el mismo `PUSH_HOOK_SECRET` del paso 2):
+**5. Guardar la URL y el secreto en Vault** (SQL, una sola vez):
 
 ```sql
+-- Sustituye TU-REF por el ref real del proyecto. Lo tienes en la URL del panel de
+-- Supabase, o en supabase/.temp/linked-project.json si has enlazado el proyecto.
+-- Copialo, no lo escribas a mano: una sola letra de mas da "Couldn't resolve host name".
 select vault.create_secret(
   'https://TU-REF.supabase.co/functions/v1/send-push', 'push_hook_url');
-select vault.create_secret('EL_MISMO_PUSH_HOOK_SECRET', 'push_hook_secret');
+
+-- El valor del paso 2, el mismo que pusiste en PUSH_HOOK_SECRET.
+select vault.create_secret('...', 'push_hook_secret');
 ```
 
-**5. Ejecutar la migracion `0006_push_dispatch.sql`.**
+Para corregir cualquiera de los dos despues:
 
-**6. Instalar la app en cada movil.** En iPhone es obligatorio: Compartir → «Anadir a
+```sql
+select vault.update_secret(
+  (select id from vault.secrets where name = 'push_hook_url'), 'el-valor-correcto');
+```
+
+**6. Ejecutar la migracion `0006_push_dispatch.sql`.**
+
+**7. Instalar la app en cada movil.** En iPhone es obligatorio: Compartir → «Anadir a
 pantalla de inicio». Luego, abriendo la app **desde ese icono**, entrar en Notificaciones y
 pulsar «Activar avisos».
 
@@ -928,6 +961,60 @@ No basta con que la suscripcion se guarde. Con la aplicacion **cerrada** en el m
    siguiente envio.
 
 Hasta que eso se haya hecho al menos una vez, el push no esta hecho.
+
+### Si no llega nada: por donde se rompe
+
+El aviso de dentro de la aplicacion funcionando (la campana con su punto) **no demuestra
+nada del push**: solo prueba el primer eslabon. La cadena real tiene cinco, y esta consulta
+los recorre entera. Es de solo lectura:
+
+```sql
+select 'trigger 0006' as que,
+       coalesce((select string_agg(tgname, ', ') from pg_trigger
+                  where tgrelid = 'public.notifications'::regclass and not tgisinternal),
+                'NINGUNO') as valor
+union all
+select 'extension pg_net',
+       coalesce((select extversion from pg_extension where extname = 'pg_net'), 'NO INSTALADA')
+union all
+select 'secretos vault',
+       coalesce((select string_agg(name, ', ') from vault.decrypted_secrets
+                  where name in ('push_hook_url', 'push_hook_secret')), 'NINGUNO')
+union all
+select 'ultimo aviso creado',
+       coalesce((select created_at::text from public.notifications
+                  order by created_at desc limit 1), 'ninguno');
+```
+
+Y el veredicto lo da siempre esta, que es la respuesta que dio el servidor:
+
+```sql
+select created, status_code, error_msg, left(coalesce(content, ''), 300) as content
+  from net._http_response
+ order by created desc
+ limit 5;
+```
+
+| Lo que ves | Que significa | Donde se arregla |
+|---|---|---|
+| Ninguna fila | La llamada no se encolo: el trigger fallo por dentro | `Logs → Postgres`, busca `WARNING: No se ha podido encolar el push` |
+| `status_code` nulo y `Couldn't resolve host name` | La URL de Vault esta mal escrita | `vault.update_secret` sobre `push_hook_url` |
+| `403` | El secreto de Vault y el `PUSH_HOOK_SECRET` de la funcion no coinciden, o la funcion no lo tiene puesto | Paso 2 y paso 3 de la puesta en marcha |
+| `404` | La funcion no esta desplegada con ese nombre | `supabase functions deploy send-push` |
+| `200` con `"sent": 0` | Nadie suscrito: falta pulsar «Activar avisos» en cada movil | La propia app |
+| `200` con `"reason": "sin-vapid"` | Faltan las claves VAPID en los secretos de la funcion, o son invalidas | Paso 3 |
+| `200` con `"sent": 1` o mas | El envio salio de verdad | Si aun asi no suena, mira los permisos del movil |
+
+Y en la aplicacion, la tarjeta de Notificaciones dice por su cuenta lo que le falta: si pone
+«todavia no estan configurados en este despliegue», falta `VITE_VAPID_PUBLIC_KEY` en el build
+(recuerda: hay que **volver a desplegar** despues de anadirla).
+
+Comprobar cuantos dispositivos hay dados de alta:
+
+```sql
+select count(*) filter (where disabled_at is null) as activas, count(*) as total
+  from public.push_subscriptions;
+```
 
 ## Operaciones habituales
 
