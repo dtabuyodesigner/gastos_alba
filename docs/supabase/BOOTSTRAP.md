@@ -962,15 +962,16 @@ No basta con que la suscripcion se guarde. Con la aplicacion **cerrada** en el m
 1. Alba sube un ticket y al movil de Dani le llega la notificacion del sistema.
    **COMPROBADO el 2026-09-07**: llego con la aplicacion cerrada y se vio en pantalla, con
    `"sent":1` en `net._http_response`.
-2. Al tocarla se abre el ticket correcto. **Sin comprobar.**
-3. Dani marca un pago y a Alba le llega el suyo. **Sin comprobar en ese sentido.**
+2. Al tocarla se abre el ticket correcto. **COMPROBADO el 2026-09-07.**
+3. Dani marca un pago y a Alba le llega el suyo. **COMPROBADO el 2026-09-07.** Importa que
+   sea una prueba aparte: es otro destinatario, otras suscripciones y otro tipo de aviso.
 4. Desinstalar la app en un movil y comprobar que su fila queda con `disabled_at` tras el
    siguiente envio. **Sin comprobar**, y ya no bloquea: la funcion desactiva sola las
    suscripciones que el servidor rechaza de forma permanente, siempre que otro envio de la
    misma tanda haya salido bien.
 
-El punto 1 es el que demuestra que la cadena entera funciona. Los otros tres siguen abiertos
-y conviene cerrarlos, pero ninguno invalida lo anterior.
+Los tres primeros quedaron comprobados el 2026-09-07, en los dos sentidos. El cuarto sigue
+abierto y ya no bloquea.
 
 ### Si no llega nada: por donde se rompe
 
