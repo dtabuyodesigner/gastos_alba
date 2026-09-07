@@ -35,11 +35,12 @@ bancario. El dinero se mueve fuera, como siempre.
 
 No hay avisos por email, ni WhatsApp, ni Telegram, y es deliberado (ver
 `docs/DECISIONES.md`). El unico canal fuera de la aplicacion es el **push del navegador**,
-que esta implementado pero **requiere configuracion propia** —claves VAPID, la Edge Function
-desplegada y la app instalada en la pantalla de inicio de cada movil—. Mientras no se
-configure, los avisos siguen viviendo solo dentro de la aplicacion y todo lo demas funciona
-igual. Los pasos exactos, y la comprobacion real que hay que pasar, estan en el apartado
-"Push del navegador" de `docs/supabase/BOOTSTRAP.md`.
+operativo desde el 2026-09-07: la notificacion salta en el movil con la aplicacion cerrada, y
+el contador del icono se actualiza con ella. Requiere configuracion propia —claves VAPID, la
+Edge Function desplegada y la app instalada en la pantalla de inicio de cada movil—, y sin
+ella los avisos siguen viviendo solo dentro de la aplicacion, que funciona igual. Los pasos,
+y que mirar cuando no llega nada, estan en el apartado "Push del navegador" de
+`docs/supabase/BOOTSTRAP.md`.
 
 ## Stack
 

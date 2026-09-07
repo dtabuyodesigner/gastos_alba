@@ -88,7 +88,7 @@ self.addEventListener('push', (event) => {
   }
 
   const title = payload.title || 'Gastos Alba'
-  event.waitUntil(
+  const tasks = [
     self.registration.showNotification(title, {
       body: payload.body || '',
       icon: '/icons/icon-192.png',
@@ -96,8 +96,29 @@ self.addEventListener('push', (event) => {
       tag: payload.tag || 'gastos-alba',
       data: { url: payload.url || '/notificaciones' },
     }),
-  )
+  ]
+
+  // El globo rojo del icono. Con la app cerrada, este es el UNICO momento en el
+  // que se puede actualizar: iOS no ejecuta la aplicacion por su cuenta, asi que
+  // sin esto el icono se queda con el numero que hubiera la ultima vez que
+  // alguien la abrio. Mientras la app esta abierta lo lleva NotificationsProvider.
+  if (typeof payload.unread === 'number') tasks.push(setBadge(payload.unread))
+
+  event.waitUntil(Promise.all(tasks))
 })
+
+/** Nunca lanza: un contador es un adorno y no puede tumbar la entrega del aviso. */
+async function setBadge(count) {
+  try {
+    if (count > 0) {
+      if (typeof self.navigator.setAppBadge === 'function') await self.navigator.setAppBadge(count)
+    } else if (typeof self.navigator.clearAppBadge === 'function') {
+      await self.navigator.clearAppBadge()
+    }
+  } catch {
+    // Permiso retirado o navegador sin Badging API. El aviso llega igual.
+  }
+}
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()

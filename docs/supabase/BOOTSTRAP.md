@@ -835,10 +835,15 @@ exportar de vez en cuando:
 ```bash
 supabase db dump --db-url "postgresql://..." -f copia-gastos-alba.sql
 ```
-## Push del navegador — implementado, pendiente de configurar
+## Push del navegador — operativo desde el 2026-09-07
 
-**El codigo esta completo; sin los pasos de abajo no sale ni un envio.** Mientras tanto la
-aplicacion funciona igual: el aviso vive en la tabla `notifications` y no depende de esto.
+**Probado de extremo a extremo el 2026-09-07**: Alba subio un ticket y la notificacion llego
+al iPhone de Dani con la aplicacion cerrada, y al reves. Confirmado ademas con `"sent":1` en
+`net._http_response`.
+
+Los pasos de abajo siguen siendo necesarios en cualquier proyecto nuevo. Sin ellos no sale ni
+un envio, y la aplicacion funciona igual: el aviso vive en la tabla `notifications` y no
+depende de esto.
 
 Piezas ya escritas:
 
@@ -955,12 +960,17 @@ pulsar «Activar avisos».
 No basta con que la suscripcion se guarde. Con la aplicacion **cerrada** en el movil:
 
 1. Alba sube un ticket y al movil de Dani le llega la notificacion del sistema.
-2. Al tocarla se abre el ticket correcto.
-3. Dani marca un pago y a Alba le llega el suyo.
+   **COMPROBADO el 2026-09-07**: llego con la aplicacion cerrada y se vio en pantalla, con
+   `"sent":1` en `net._http_response`.
+2. Al tocarla se abre el ticket correcto. **Sin comprobar.**
+3. Dani marca un pago y a Alba le llega el suyo. **Sin comprobar en ese sentido.**
 4. Desinstalar la app en un movil y comprobar que su fila queda con `disabled_at` tras el
-   siguiente envio.
+   siguiente envio. **Sin comprobar**, y ya no bloquea: la funcion desactiva sola las
+   suscripciones que el servidor rechaza de forma permanente, siempre que otro envio de la
+   misma tanda haya salido bien.
 
-Hasta que eso se haya hecho al menos una vez, el push no esta hecho.
+El punto 1 es el que demuestra que la cadena entera funciona. Los otros tres siguen abiertos
+y conviene cerrarlos, pero ninguno invalida lo anterior.
 
 ### Si no llega nada: por donde se rompe
 

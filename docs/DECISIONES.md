@@ -314,8 +314,9 @@ configuracion para ganar un minuto en un aviso domestico.
 **Decision.** El push esta implementado de punta a punta: alta de la suscripcion desde el
 cliente (`src/features/notifications/push.ts`, con su boton en Notificaciones), envio desde
 la Edge Function `send-push`, y un trigger `after insert` sobre `notifications` que la llama
-(migracion `0006`). **Requiere configuracion** —claves VAPID y secretos— que depende del
-proyecto Supabase concreto; sin ella no sale ningun envio.
+(migracion `0006`). **Operativo y comprobado el 2026-09-07** en los dos iPhone, con la
+aplicacion cerrada. Requiere configuracion —claves VAPID y secretos— que depende del proyecto
+Supabase concreto; sin ella no sale ningun envio.
 
 **Por que colgado del insert y no en paralelo.** El aviso in-app es la fuente de verdad. Si
 el push saliera por su cuenta desde el codigo que crea el gasto, podrian desincronizarse:
@@ -333,8 +334,38 @@ explica en vez de ofrecer un boton que no haria nada. Es la limitacion mas impor
 todo el apartado.
 
 **Baja logica, tambien aqui.** Una suscripcion revocada (app desinstalada, permiso retirado)
-no se borra: la funcion la marca `disabled_at` al recibir un 404 o un 410, coherente con el
-resto del proyecto.
+no se borra: la funcion la marca `disabled_at`, coherente con el resto del proyecto. Con un
+404 o un 410 se desactiva sin mas. Con un 400 o un 403 —el rechazo tipico de una suscripcion
+huerfana de un par VAPID anterior— **solo si algun otro envio de la misma tanda salio bien**:
+eso demuestra que la configuracion es correcta y que el problema es de esa fila. Si fallan
+todas, no se toca ninguna, porque seria una mala configuracion y desactivarlas dejaria la
+casa entera sin avisos.
+
+**Lo que costo dos dias, y no fue ninguno de los fallos.** El push tardo en funcionar por
+cinco errores encadenados, pero el que hizo dano de verdad fue que la funcion respondia
+`200 {"sent":0}` pasara lo que pasara: sin credencial de servidor, con las claves cruzadas o
+sin nadie suscrito. Ese cuerpo se lee como «esta persona no tiene ningun movil dado de alta»,
+y mando el diagnostico dos dias en la direccion equivocada mientras la base de datos decia lo
+contrario. De ahi tres reglas que este proyecto ya no negocia:
+
+  * Un fallo de configuracion responde **500 con su motivo**, nunca 200.
+  * La respuesta distingue `found` (cuantas suscripciones habia) de `sent` (cuantas
+    salieron). «No habia a quien enviar» y «lo intente y me lo rechazaron» son cosas
+    distintas y no pueden compartir representacion.
+  * Los rechazos viajan en la respuesta, no solo al log: esto se diagnostica desde SQL en
+    `net._http_response`, porque no hay forma de abrir la consola de un iPhone.
+
+**Rotacion de claves VAPID.** Una suscripcion queda atada para siempre a la clave publica con
+la que se creo. Por eso `enablePush` comprueba que la suscripcion existente sea del par
+vigente y, si no lo es, la da de baja y la rehace; y `readPushStatus` cuenta una suscripcion
+huerfana como NO activada, para que la tarjeta ofrezca «Activar avisos» en lugar de
+«Desactivar». Sin eso, cambiar de claves no da ningun error visible en el movil: falla mucho
+despues, con un 403 del servidor de Apple.
+
+**El contador del icono depende del push.** En iOS, la Badging API solo se puede actualizar
+mientras la aplicacion esta abierta o cuando un push despierta al service worker. Por eso el
+manejador `push` pinta el contador con el numero de no leidos que viaja en el envio: sin esa
+llamada, el icono se queda con lo que sabia la ultima vez que alguien abrio la aplicacion.
 
 **Sin secretos en el cliente.** La clave privada VAPID es de servidor. En el frontend solo
 entraria la clave publica, que es publica por definicion. La `service_role` no aparece por

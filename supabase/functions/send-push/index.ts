@@ -174,10 +174,21 @@ Deno.serve(async (request) => {
     return json({ error: 'lectura-fallida', detail: error.message, keySource: service.source }, 500)
   }
 
+  // Cuantos avisos sin leer acumula el destinatario. Viaja en el envio para que
+  // el service worker pueda pintar el contador del icono con la app CERRADA:
+  // iOS no ejecuta la aplicacion por su cuenta, asi que si el numero no llega
+  // aqui, no hay forma de saberlo hasta que alguien la abra.
+  const { count: unread } = await admin
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('recipient_profile_id', row.recipient_profile_id)
+    .is('read_at', null)
+
   const payload = JSON.stringify({
     title: row.title,
     body: row.body,
     url: targetUrl(row),
+    unread: unread ?? 0,
     // Un `tag` por aviso: dos tickets distintos no deben pisarse en la bandeja.
     tag: `gastos-alba-${row.id}`,
   })
@@ -187,6 +198,8 @@ Deno.serve(async (request) => {
   // Los rechazos se DEVUELVEN, no solo se escriben en el log: el log de la
   // funcion no se ve desde SQL, y esto se diagnostica desde SQL.
   const failures: { status?: number; message: string }[] = []
+  /** Rechazos permanentes de un endpoint concreto, a la espera de veredicto. */
+  const rejected: string[] = []
 
   await Promise.all(
     ((subscriptions ?? []) as SubscriptionRow[]).map(async (subscription) => {
@@ -205,6 +218,15 @@ Deno.serve(async (request) => {
         // permiso retirado). No se borra la fila, se desactiva.
         if (status === 404 || status === 410) {
           expired.push(subscription.id)
+        } else if (status === 400 || status === 403) {
+          // Rechazo permanente de ESTE endpoint (tipicamente una suscripcion
+          // huerfana de un par VAPID anterior). Se apunta aparte: solo se
+          // desactiva si algun otro envio de esta misma tanda salio bien, lo que
+          // demuestra que la configuracion es correcta y el problema es de esta
+          // fila. Si fallan todas, no se toca nada: seria una mala configuracion
+          // y desactivar a todo el mundo dejaria la casa sin avisos.
+          rejected.push(subscription.id)
+          failures.push({ status, message: ((err as Error).message ?? '').slice(0, 200) })
         } else {
           const message = (err as Error).message ?? ''
           console.error('Fallo al enviar push:', status, message)
@@ -216,11 +238,15 @@ Deno.serve(async (request) => {
     }),
   )
 
-  if (expired.length > 0) {
+  // Los rechazos permanentes solo cuentan si otro envio de la misma tanda salio
+  // bien: eso separa "esta suscripcion esta muerta" de "esta todo mal montado".
+  const toDisable = sent > 0 ? [...expired, ...rejected] : expired
+
+  if (toDisable.length > 0) {
     await admin
       .from('push_subscriptions')
       .update({ disabled_at: new Date().toISOString() })
-      .in('id', expired)
+      .in('id', toDisable)
   }
 
   // `found` distingue "no habia a quien enviar" de "habia y fallaron todos".
@@ -230,7 +256,7 @@ Deno.serve(async (request) => {
     {
       sent,
       found: subscriptions?.length ?? 0,
-      disabled: expired.length,
+      disabled: toDisable.length,
       ...(failures.length > 0 ? { failures } : {}),
     },
     200,
